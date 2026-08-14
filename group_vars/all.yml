@@ -48,6 +48,7 @@ skip_disk_check: false
 # Async timeout for long ALTER / DELETE (seconds). Default 3 days.
 mysql_ddl_timeout_sec: 259200
 mysql_ddl_poll_sec: 30
+mysql_retries: 8
 
 # If a tier fails, continue with the next row count (report still written).
 continue_on_tier_failure: false

@@ -14,6 +14,29 @@ import time
 import subprocess
 from multiprocessing import Pool
 
+# region agent log
+_DEBUG_SESSION = "e9da19"
+_DEBUG_LOG_DEFAULT = "/var/tmp/wc_bench/debug-e9da19.log"
+_DEBUG_LOG_LOCAL = (
+    "/Users/otto/Cursor_Repos/iw-wm-db-upgrade-test/.cursor/debug-e9da19.log"
+)
+_DEBUG_INGEST = (
+    "http://127.0.0.1:7582/ingest/979dfc66-66e3-4890-9e31-c2af32ce3e11"
+)
+# endregion
+
+_TRANSIENT_MYSQL = (
+    "ERROR 2013",
+    "ERROR 2006",
+    "ERROR 1159",
+    "ERROR 1161",
+    "Lost connection",
+    "MySQL server has gone away",
+    "Can't connect to MySQL",
+    "Can't connect to local MySQL",
+    "Connection reset",
+)
+
 DATE_MIN = 1577836800  # 2020-01-01 UTC
 DATE_SPAN = 86400 * 365 * 6
 
@@ -136,6 +159,64 @@ class MysqlError(Exception):
     pass
 
 
+def _transient_mysql(err):
+    text = str(err)
+    for marker in _TRANSIENT_MYSQL:
+        if marker.lower() in text.lower():
+            return True
+    return False
+
+
+def _index_name_from_def(defn):
+    parts = defn.replace("`", "").split()
+    if not parts:
+        return defn
+    if parts[0].upper() == "UNIQUE":
+        return parts[2] if len(parts) > 2 else defn
+    if parts[0].upper() == "KEY":
+        return parts[1]
+    return parts[1] if len(parts) > 1 else defn
+
+
+# region agent log
+def _agent_log(hypothesis_id, location, message, data):
+    payload = {
+        "sessionId": _DEBUG_SESSION,
+        "runId": os.environ.get("WC_BENCH_DEBUG_RUN", "post-fix"),
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    line = json.dumps(payload, default=str)
+    log_path = os.environ.get("WC_BENCH_DEBUG_LOG") or _DEBUG_LOG_DEFAULT
+    for path in (log_path, _DEBUG_LOG_LOCAL):
+        try:
+            parent = os.path.dirname(path)
+            if parent and not os.path.isdir(parent):
+                continue
+            with open(path, "a") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            _DEBUG_INGEST,
+            data=line.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": _DEBUG_SESSION,
+            },
+        )
+        urllib.request.urlopen(req, timeout=1).read()
+    except Exception:
+        pass
+# endregion
+
+
 def eprint(*a):
     sys.stderr.write(" ".join(str(x) for x in a) + "\n")
     sys.stderr.flush()
@@ -196,7 +277,10 @@ def sql_quote_path(path):
     return path.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def run_mysql(cfg, sql, database=None):
+def run_mysql(cfg, sql, database=None, retries=None):
+    if retries is None:
+        retries = int(cfg.get("mysql_retries", 5))
+    timeout = int(cfg.get("session_timeout", 259200))
     cmd = [
         cfg["mysql_bin"],
         "--defaults-extra-file=" + cfg["defaults_extra_file"],
@@ -204,20 +288,64 @@ def run_mysql(cfg, sql, database=None):
         "--raw",
         "--skip-column-names",
         "--default-character-set=utf8mb4",
+        "--connect-timeout=60",
     ]
     if database:
         cmd.extend(["--database", database])
     cmd.extend(["-e", sql])
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-    )
-    if proc.returncode != 0:
+    last_err = None
+    attempts = max(1, retries)
+    for attempt in range(1, attempts + 1):
+        t0 = time.time()
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        duration = time.time() - t0
         err = (proc.stderr or proc.stdout or "").strip()
-        raise MysqlError(err or "mysql exited %d" % proc.returncode)
-    return proc.stdout
+        # region agent log
+        _agent_log(
+            "A",
+            "fast_data_generator.py:run_mysql",
+            "mysql invocation finished",
+            {
+                "attempt": attempt,
+                "attempts": attempts,
+                "rc": proc.returncode,
+                "duration_s": round(duration, 3),
+                "sql_prefix": (sql or "")[:180],
+                "stderr_prefix": (err or "")[:300],
+                "cli_timeout_s": timeout,
+            },
+        )
+        # endregion
+        if proc.returncode == 0:
+            return proc.stdout
+        last_err = MysqlError(err or "mysql exited %d" % proc.returncode)
+        transient = _transient_mysql(last_err)
+        # region agent log
+        _agent_log(
+            "B",
+            "fast_data_generator.py:run_mysql",
+            "mysql invocation failed",
+            {
+                "attempt": attempt,
+                "transient": transient,
+                "error": str(last_err)[:400],
+            },
+        )
+        # endregion
+        if (not transient) or attempt >= attempts:
+            raise last_err
+        backoff = min(60, 2 ** (attempt - 1))
+        eprint(
+            "[seed] mysql transient error (attempt %d/%d), retry in %ss: %s"
+            % (attempt, attempts, backoff, last_err)
+        )
+        time.sleep(backoff)
+    raise last_err
 
 
 def load_data(cfg, table, path, columns):
@@ -277,8 +405,71 @@ def drop_secondary_indexes(cfg, table):
 def add_indexes(cfg, table, defs):
     if not defs:
         return
-    sql = "ALTER TABLE `%s` ADD %s" % (table, ", ADD ".join(defs))
-    run_mysql(cfg, sql, database=cfg["database"])
+    timeout = int(cfg.get("session_timeout", 259200))
+    retries = int(cfg.get("mysql_retries", 5))
+    last_err = None
+    for attempt in range(1, retries + 1):
+        existing = set(list_secondary_indexes(cfg, table))
+        still = [d for d in defs if _index_name_from_def(d) not in existing]
+        # region agent log
+        _agent_log(
+            "E",
+            "fast_data_generator.py:add_indexes",
+            "index rebuild attempt",
+            {
+                "table": table,
+                "attempt": attempt,
+                "existing": sorted(existing),
+                "pending": [_index_name_from_def(d) for d in still],
+            },
+        )
+        # endregion
+        if not still:
+            eprint("[seed] %s secondary indexes already present" % table)
+            return
+        sql = (
+            "SET SESSION wait_timeout=%d; "
+            "SET SESSION net_read_timeout=%d; "
+            "SET SESSION net_write_timeout=%d; "
+            "SET SESSION max_execution_time=0; "
+            "ALTER TABLE `%s` ADD %s"
+            % (timeout, timeout, timeout, table, ", ADD ".join(still))
+        )
+        try:
+            run_mysql(cfg, sql, database=cfg["database"], retries=1)
+            return
+        except MysqlError as exc:
+            last_err = exc
+            text = str(exc)
+            transient = _transient_mysql(exc)
+            duplicate = "Duplicate key name" in text or "ERROR 1061" in text
+            # region agent log
+            _agent_log(
+                "C",
+                "fast_data_generator.py:add_indexes",
+                "index rebuild failed",
+                {
+                    "table": table,
+                    "attempt": attempt,
+                    "transient": transient,
+                    "duplicate": duplicate,
+                    "error": text[:400],
+                },
+            )
+            # endregion
+            if duplicate:
+                eprint("[seed] %s index add hit duplicate keys; re-checking" % table)
+                continue
+            if (not transient) or attempt >= retries:
+                raise
+            backoff = min(60, 2 ** (attempt - 1))
+            eprint(
+                "[seed] %s index rebuild lost connection (attempt %d/%d), retry in %ss"
+                % (table, attempt, retries, backoff)
+            )
+            time.sleep(backoff)
+    if last_err:
+        raise last_err
 
 
 def write_folder_tsv(path, num_accounts, folders_per_account):
@@ -459,16 +650,24 @@ def split_ranges(start, end, workers):
 
 
 def apply_source_fks(cfg):
+    timeout = int(cfg.get("session_timeout", 259200))
+    prefix = (
+        "SET SESSION wait_timeout=%d; SET SESSION net_read_timeout=%d; "
+        "SET SESSION net_write_timeout=%d; SET SESSION max_execution_time=0; "
+        % (timeout, timeout, timeout)
+    )
     run_mysql(
         cfg,
-        "ALTER TABLE item ADD CONSTRAINT FK_item_folder "
+        prefix
+        + "ALTER TABLE item ADD CONSTRAINT FK_item_folder "
         "FOREIGN KEY (folder_id) REFERENCES folder(folder_id) "
         "ON DELETE CASCADE ON UPDATE CASCADE",
         database=cfg["database"],
     )
     run_mysql(
         cfg,
-        "ALTER TABLE snoozed_item ADD CONSTRAINT `_snoozed_item_ibfk_1` "
+        prefix
+        + "ALTER TABLE snoozed_item ADD CONSTRAINT `_snoozed_item_ibfk_1` "
         "FOREIGN KEY (snoozed_item_id) REFERENCES item(item_id) "
         "ON DELETE CASCADE ON UPDATE CASCADE",
         database=cfg["database"],
@@ -489,6 +688,12 @@ def main():
     parser.add_argument("--snooze-rate", type=float, default=0.001)
     parser.add_argument("--apply-source-fks", action="store_true")
     parser.add_argument("--session-timeout", type=int, default=259200)
+    parser.add_argument("--mysql-retries", type=int, default=8)
+    parser.add_argument(
+        "--debug-log",
+        default="",
+        help="NDJSON debug log path (default /var/tmp/wc_bench/debug-e9da19.log)",
+    )
     args = parser.parse_args()
 
     if args.rows < 1:
@@ -507,6 +712,8 @@ def main():
         return 2
 
     os.makedirs(args.staging_dir, exist_ok=True)
+    if args.debug_log:
+        os.environ["WC_BENCH_DEBUG_LOG"] = args.debug_log
 
     cfg = {
         "mysql_bin": args.mysql_bin,
@@ -515,6 +722,7 @@ def main():
         "staging_dir": args.staging_dir,
         "batch_size": args.batch_size,
         "session_timeout": args.session_timeout,
+        "mysql_retries": args.mysql_retries,
         "num_folders": num_folders,
         "folders_per_account": args.folders_per_account,
         "num_accounts": num_accounts,
@@ -595,6 +803,29 @@ def main():
 
     t_idx = time.time()
     eprint("[seed] rebuilding secondary indexes")
+    try:
+        timeout_vars = run_mysql(
+            cfg,
+            "SELECT @@net_read_timeout, @@net_write_timeout, @@wait_timeout, "
+            "@@max_execution_time, @@innodb_buffer_pool_size",
+            database=args.database,
+        ).strip()
+    except MysqlError as exc:
+        timeout_vars = str(exc)
+    # region agent log
+    _agent_log(
+        "A",
+        "fast_data_generator.py:main",
+        "starting secondary index rebuild",
+        {
+            "database": args.database,
+            "item_count": loaded_items,
+            "timeout_vars": timeout_vars,
+            "mysql_retries": args.mysql_retries,
+            "session_timeout": args.session_timeout,
+        },
+    )
+    # endregion
     add_indexes(cfg, "folder", FOLDER_INDEX_DEFS)
     add_indexes(cfg, "item", ITEM_INDEX_DEFS)
     add_indexes(cfg, "snoozed_item", SNOOZED_INDEX_DEFS)

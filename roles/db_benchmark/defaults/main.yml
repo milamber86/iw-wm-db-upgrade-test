@@ -51,3 +51,4 @@ forbidden_databases:
   - performance_schema
 
 mysql_session_timeout_sec: 259200
+mysql_retries: 8

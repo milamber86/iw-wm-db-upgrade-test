@@ -62,6 +62,10 @@
           - "{{ snooze_rate | string }}"
           - --session-timeout
           - "{{ mysql_session_timeout_sec | string }}"
+          - --mysql-retries
+          - "{{ mysql_retries | string }}"
+          - --debug-log
+          - "{{ resolved_work_dir }}/debug-e9da19.log"
         _fk_flag: "{{ ['--apply-source-fks'] if (apply_source_fks_after_seed | bool) else [] }}"
       async: "{{ mysql_ddl_timeout_sec | int }}"
       poll: "{{ mysql_ddl_poll_sec | int }}"
@@ -103,6 +107,13 @@
           total_length: "{{ _tables.values() | map(attribute='total_length') | map('int') | sum }}"
 
   always:
+    - name: Fetch seed debug log
+      ansible.builtin.fetch:
+        src: "{{ resolved_work_dir }}/debug-e9da19.log"
+        dest: "{{ playbook_dir }}/.cursor/debug-e9da19.log"
+        flat: true
+      failed_when: false
+
     - name: Restore GLOBAL tunables
       ansible.builtin.command:
         argv:

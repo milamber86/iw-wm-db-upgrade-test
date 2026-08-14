@@ -38,6 +38,10 @@
       port={{ mysql_port }}
       {% endif %}
       default-character-set=utf8mb4
+      connect-timeout=60
+      net_read_timeout={{ mysql_session_timeout_sec }}
+      net_write_timeout={{ mysql_session_timeout_sec }}
+      init-command=SET SESSION wait_timeout={{ mysql_session_timeout_sec }},net_read_timeout={{ mysql_session_timeout_sec }},net_write_timeout={{ mysql_session_timeout_sec }},max_execution_time=0
 
 - name: Query MySQL identity
   ansible.builtin.command:
