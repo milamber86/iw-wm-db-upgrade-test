@@ -26,6 +26,7 @@ enable_load_tuning: false
 load_tuning_innodb_flush_log_at_trx_commit: 0
 load_tuning_sync_binlog: 0
 
+# Add production FKs on the empty schema (before LOAD DATA).
 apply_source_fks_after_seed: true
 fix_fk_type_mismatch: true
 

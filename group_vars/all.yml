@@ -34,7 +34,8 @@ enable_load_tuning: false
 load_tuning_innodb_flush_log_at_trx_commit: 0
 load_tuning_sync_binlog: 0
 
-# Add production FKs after seed so Step 1 DROP FOREIGN KEY is a real timed operation.
+# Add production FKs on the empty schema (before LOAD DATA) so Step 1 DROP FOREIGN KEY
+# is a real timed operation. Do not add FKs after load — that ALTER scans item and can crash mysqld.
 apply_source_fks_after_seed: true
 
 # Step 6 promotes item.item_id to BIGINT; snoozed_item.snoozed_item_id stays INT.

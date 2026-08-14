@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate realistic IceWarp WC test data and bulk-load it with LOAD DATA INFILE.
 
-Secondary indexes are dropped before load and rebuilt afterwards (DISABLE KEYS is a
-no-op on InnoDB). Prints a JSON summary to stdout; progress goes to stderr.
+The empty schema (indexes + optional FKs) is created first. LOAD DATA runs with
+FOREIGN_KEY_CHECKS=0 and UNIQUE_CHECKS=0 so InnoDB does not validate FKs or
+rebuild indexes in a later ALTER. Prints a JSON summary to stdout; progress
+goes to stderr.
 """
 from __future__ import print_function
 
@@ -748,11 +750,49 @@ def main():
         database=args.database,
     )
 
-    t0 = time.time()
-    for table in ("item", "folder", "snoozed_item"):
-        drop_secondary_indexes(cfg, table)
-    drop_index_seconds = time.time() - t0
-    eprint("[seed] dropped secondary indexes in %s" % human_duration(drop_index_seconds))
+    drop_index_seconds = 0.0
+    eprint(
+        "[seed] loading into existing schema (indexes kept; "
+        "FOREIGN_KEY_CHECKS=0 UNIQUE_CHECKS=0 during LOAD DATA)"
+    )
+    db_esc = args.database.replace("'", "''")
+    schema_fks = run_mysql(
+        cfg,
+        "SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS "
+        "WHERE TABLE_SCHEMA='%s' AND CONSTRAINT_TYPE='FOREIGN KEY' "
+        "ORDER BY TABLE_NAME, CONSTRAINT_NAME" % db_esc,
+    ).strip()
+    schema_indexes = run_mysql(
+        cfg,
+        "SELECT DISTINCT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS "
+        "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME IN ('item','folder','snoozed_item') "
+        "ORDER BY TABLE_NAME, INDEX_NAME" % db_esc,
+    ).strip()
+    # region agent log
+    _agent_log(
+        "B",
+        "fast_data_generator.py:main",
+        "pre-load schema FKs and indexes",
+        {
+            "database": args.database,
+            "rows": args.rows,
+            "foreign_keys": schema_fks,
+            "indexes": schema_indexes,
+        },
+    )
+    _agent_log(
+        "C",
+        "fast_data_generator.py:main",
+        "load into indexed schema; skip post-load ALTER INDEX/FK",
+        {
+            "database": args.database,
+            "rows": args.rows,
+            "apply_source_fks": bool(args.apply_source_fks),
+            "fk_count": len([ln for ln in schema_fks.splitlines() if ln.strip()]),
+            "index_count": len([ln for ln in schema_indexes.splitlines() if ln.strip()]),
+        },
+    )
+    # endregion
 
     t_load = time.time()
     folder_path = os.path.join(args.staging_dir, "wc_bench_folders.tsv")
@@ -801,44 +841,29 @@ def main():
         os.remove(snoozed_path)
     load_seconds = time.time() - t_load
 
-    t_idx = time.time()
-    eprint("[seed] rebuilding secondary indexes")
-    try:
-        timeout_vars = run_mysql(
-            cfg,
-            "SELECT @@net_read_timeout, @@net_write_timeout, @@wait_timeout, "
-            "@@max_execution_time, @@innodb_buffer_pool_size",
-            database=args.database,
-        ).strip()
-    except MysqlError as exc:
-        timeout_vars = str(exc)
+    index_build_seconds = 0.0
+    eprint("[seed] skipping post-load index rebuild and FK ALTER (schema already has them)")
     # region agent log
     _agent_log(
-        "A",
+        "D",
         "fast_data_generator.py:main",
-        "starting secondary index rebuild",
+        "load complete; no post-load ALTER",
         {
             "database": args.database,
             "item_count": loaded_items,
-            "timeout_vars": timeout_vars,
-            "mysql_retries": args.mysql_retries,
-            "session_timeout": args.session_timeout,
+            "load_seconds": round(load_seconds, 3),
+            "index_build_seconds": 0,
+            "fk_seconds": 0,
+            "seed_mode": "load_into_indexed_schema",
         },
     )
     # endregion
-    add_indexes(cfg, "folder", FOLDER_INDEX_DEFS)
-    add_indexes(cfg, "item", ITEM_INDEX_DEFS)
-    add_indexes(cfg, "snoozed_item", SNOOZED_INDEX_DEFS)
-    index_build_seconds = time.time() - t_idx
-    eprint("[seed] indexes rebuilt in %s" % human_duration(index_build_seconds))
 
     fk_seconds = 0.0
     if args.apply_source_fks:
-        t_fk = time.time()
-        eprint("[seed] adding source foreign keys")
-        apply_source_fks(cfg)
-        fk_seconds = time.time() - t_fk
-        eprint("[seed] FKs added in %s" % human_duration(fk_seconds))
+        eprint(
+            "[seed] ignoring --apply-source-fks; add FKs on the empty schema in create_schema.yml"
+        )
 
     elapsed = time.time() - t_all
     summary = {
@@ -859,6 +884,7 @@ def main():
         "workers": args.workers,
         "batch_size": args.batch_size,
         "apply_source_fks": bool(args.apply_source_fks),
+        "seed_mode": "load_into_indexed_schema",
     }
     json.dump(summary, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

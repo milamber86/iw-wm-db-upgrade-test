@@ -30,3 +30,33 @@
     executable: /bin/bash
   register: apply_schema
   changed_when: true
+
+- name: Add item folder FK on empty table
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --database={{ tier_db_name }}
+      - -e
+      - >-
+        ALTER TABLE item ADD CONSTRAINT FK_item_folder
+          FOREIGN KEY (folder_id) REFERENCES folder(folder_id)
+          ON DELETE CASCADE ON UPDATE CASCADE
+  when: apply_source_fks_after_seed | bool
+  register: apply_empty_fk_item
+  changed_when: true
+
+- name: Add snoozed_item FK on empty table
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --database={{ tier_db_name }}
+      - -e
+      - >-
+        ALTER TABLE snoozed_item ADD CONSTRAINT `_snoozed_item_ibfk_1`
+          FOREIGN KEY (snoozed_item_id) REFERENCES item(item_id)
+          ON DELETE CASCADE ON UPDATE CASCADE
+  when: apply_source_fks_after_seed | bool
+  register: apply_empty_fk_snoozed
+  changed_when: true

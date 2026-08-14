@@ -63,7 +63,7 @@ Additional MySQL variables:
 
 ## Seeding method
 
-Secondary indexes are dropped, rows are loaded with `LOAD DATA INFILE`, then production indexes (and optional source FKs) are rebuilt **before** migration. `DISABLE KEYS` is a no-op on InnoDB and is not used. Index rebuild time is part of **seed**, not migration.
+The empty schema is created with production indexes (and optional source FKs). Rows are loaded with `LOAD DATA INFILE` under `FOREIGN_KEY_CHECKS=0` / `UNIQUE_CHECKS=0`. Post-load `ALTER TABLE ... ADD INDEX` / `ADD CONSTRAINT` is not used (it can crash mysqld on a populated `item` table).
 
 ## Per-tier results
 
@@ -85,6 +85,7 @@ _No tiers completed._
 | Folders | {{ tier.seed.folder_count | default('n/a') }} |
 | Items | {{ tier.seed.item_count | default('n/a') }} |
 | Snoozed items | {{ tier.seed.snoozed_count | default('n/a') }} |
+| Seed mode | {{ tier.seed.seed_mode | default('n/a') }} |
 | Total seed time | {{ tier.seed.elapsed_human | default(tier.seed.elapsed_seconds | default('n/a')) }} |
 | LOAD DATA time | {{ tier.seed.load_human | default(tier.seed.load_seconds | default('n/a')) }} |
 | Index rebuild time | {{ tier.seed.index_build_human | default(tier.seed.index_build_seconds | default('n/a')) }} |
@@ -184,7 +185,7 @@ These are planning notes from this benchmark, not a go-live runbook.
    - `innodb_flush_log_at_trx_commit=2` (or `0` on a dedicated box) and `sync_binlog=0` cut fsync cost during the copy; they raise crash-loss risk.
    - `innodb_autoinc_lock_mode=2` (interleaved) helps parallel loaders; it is not runtime-changeable without a restart on many versions.
    - MySQL 8.0.27+: raise `innodb_ddl_threads` / `innodb_parallel_read_threads` for parallel sort/rebuild if CPU and I/O have headroom.
-6. **Foreign keys.** Step 1 is a no-op unless FKs exist. This harness can add them after seed (`apply_source_fks_after_seed`). Step 5/7 FK validation scans `item` / `snoozed_item` — budget that time. Step 6 leaves `snoozed_item.snoozed_item_id` as INT while `item.item_id` becomes BIGINT; production SQL should convert `snoozed_item_id` before Step 7 (`fix_fk_type_mismatch` in this project).
+6. **Foreign keys.** Step 1 is a no-op unless FKs exist. This harness adds them on the empty schema (`apply_source_fks_after_seed`) and loads with `FOREIGN_KEY_CHECKS=0`. Step 5/7 FK validation scans `item` / `snoozed_item` — budget that time. Step 6 leaves `snoozed_item.snoozed_item_id` as INT while `item.item_id` becomes BIGINT; production SQL should convert `snoozed_item_id` before Step 7 (`fix_fk_type_mismatch` in this project).
 7. **Orphan deletes (Step 4).** With consistent seed data the `DELETE ... LEFT JOIN` still scans `item`. On 100M/500M/1B that can rival an ALTER. Run `EXPLAIN` / consider chunked deletes in production if orphans are rare but the nested-loop join is not.
 8. **Step 8–9** are metadata-scale (folders/accounts), not `item`-scale, unless you have millions of folders. Still avoid mixing them in the same lock window as Step 6.
 9. **Start with 1M, then 10M, then 100M, on production-like storage (same SSD/RAID, same `innodb_io_capacity`).** Do not extrapolate 1M durations linearly to 500M or 1B; rebuilds are roughly linear in table bytes plus a large constant for index build, and can go superlinear when the working set spills the buffer pool.

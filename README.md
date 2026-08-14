@@ -47,7 +47,7 @@ The 1B tier refuses to start unless you pass `-e confirm_1b=true`.
 1. Edit `inventory.ini`: `ansible_host`, `ansible_user`, `mysql_user`, `mysql_password` (and `mysql_socket` if you do not use TCP).
 2. Review knobs in `group_vars/all.yml` (`batch_size`, `seed_workers`, `keep_database`, …).
 
-`DISABLE KEYS` is a no-op on InnoDB. Seeding drops secondary indexes, `LOAD DATA INFILE`s in batches, then rebuilds the production indexes **before** migration so the timed ALTERs see a realistic table.
+`DISABLE KEYS` is a no-op on InnoDB. The empty schema is created with production indexes (and optional FKs), then `LOAD DATA INFILE` runs with `FOREIGN_KEY_CHECKS=0` and `UNIQUE_CHECKS=0`. Adding FKs or secondary indexes after a full `item` table can take hours and crash mysqld; do not rebuild them post-load.
 
 ## Run
 
