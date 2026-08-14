@@ -71,7 +71,7 @@
       ansible.builtin.set_fact:
         seed_summary: "{{ seed_async.stdout | from_json }}"
 
-    - name: Snapshot pre-migration table sizes
+    - name: ANALYZE TABLE and snapshot pre-migration sizes
       ansible.builtin.command:
         argv:
           - python3
@@ -83,6 +83,11 @@
           - --mysql-bin
           - "{{ mysql_bin }}"
           - --snapshot-only
+          - --analyze
+          - --session-timeout
+          - "{{ mysql_session_timeout_sec | string }}"
+      async: "{{ mysql_ddl_timeout_sec | int }}"
+      poll: "{{ mysql_ddl_poll_sec | int }}"
       register: pre_snap_raw
       changed_when: false
 

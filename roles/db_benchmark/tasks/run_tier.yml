@@ -62,7 +62,7 @@
 - name: Run migration
   ansible.builtin.import_tasks: run_migration.yml
 
-- name: Snapshot post-migration table sizes
+- name: ANALYZE TABLE and snapshot post-migration sizes
   ansible.builtin.command:
     argv:
       - python3
@@ -74,6 +74,11 @@
       - --mysql-bin
       - "{{ mysql_bin }}"
       - --snapshot-only
+      - --analyze
+      - --session-timeout
+      - "{{ mysql_session_timeout_sec | string }}"
+  async: "{{ mysql_ddl_timeout_sec | int }}"
+  poll: "{{ mysql_ddl_poll_sec | int }}"
   register: post_snap_raw
   changed_when: false
 

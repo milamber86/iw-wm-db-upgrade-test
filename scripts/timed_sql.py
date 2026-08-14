@@ -80,23 +80,26 @@ def parse_tsv_pairs(stdout):
     return result
 
 
-def snapshot_tables(args):
-    db = args.database
+def snapshot_where(args):
+    db = args.database.replace("'", "''")
     if args.tables:
         names = [t.strip() for t in args.tables.split(",") if t.strip()]
         in_list = ",".join("'" + n.replace("'", "''") + "'" for n in names)
-        where = "table_schema = '%s' AND table_name IN (%s)" % (
-            db.replace("'", "''"),
-            in_list,
-        )
-    else:
-        where = "table_schema = '%s' AND table_type = 'BASE TABLE'" % db.replace(
-            "'", "''"
-        )
+        return "table_schema = '%s' AND table_name IN (%s)" % (db, in_list)
+    return "table_schema = '%s' AND table_type = 'BASE TABLE'" % db
+
+
+def snapshot_tables(args, analyze=False):
+    timeout = int(getattr(args, "session_timeout", 259200))
+    timeout_sql = (
+        "SET SESSION wait_timeout=%d; SET SESSION net_read_timeout=%d; "
+        "SET SESSION net_write_timeout=%d; SET SESSION interactive_timeout=%d; "
+        % (timeout, timeout, timeout, timeout)
+    )
     sql = (
         "SELECT table_name, "
         "IFNULL(data_length, 0), IFNULL(index_length, 0), IFNULL(table_rows, 0) "
-        "FROM information_schema.tables WHERE %s" % where
+        "FROM information_schema.tables WHERE %s" % snapshot_where(args)
     )
     stdout = run_mysql(args, sql)
     tables = {}
@@ -111,6 +114,25 @@ def snapshot_tables(args):
             "table_rows": int(parts[3] or 0),
             "total_length": int(parts[1] or 0) + int(parts[2] or 0),
         }
+    names = list(tables.keys())
+    if analyze and names:
+        analyze_sql = timeout_sql + "ANALYZE TABLE " + ", ".join(
+            "`%s`" % n.replace("`", "``") for n in names
+        )
+        run_mysql(args, analyze_sql, database=args.database)
+        stdout = run_mysql(args, sql)
+        tables = {}
+        for line in stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            name = parts[0]
+            tables[name] = {
+                "data_length": int(parts[1] or 0),
+                "index_length": int(parts[2] or 0),
+                "table_rows": int(parts[3] or 0),
+                "total_length": int(parts[1] or 0) + int(parts[2] or 0),
+            }
     return tables
 
 
@@ -280,6 +302,11 @@ def main():
         help="Only dump information_schema table sizes as JSON",
     )
     parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="ANALYZE TABLE then re-read information_schema.table_rows",
+    )
+    parser.add_argument(
         "--status",
         default="ok",
         help="Used with --record-skip to append a skipped statement",
@@ -298,7 +325,9 @@ def main():
     args.step = step
 
     if args.snapshot_only:
-        payload = {"tables": snapshot_tables(args)}
+        payload = {
+            "tables": snapshot_tables(args, analyze=args.analyze)
+        }
         json.dump(payload, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 0
