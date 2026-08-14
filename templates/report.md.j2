@@ -26,7 +26,7 @@
 
 Generated: `{{ benchmark_run.generated_at | default('n/a') }}`
 
-This report times the INT→BIGINT and folder-redesign SQL pipeline against isolated `test_wc_*` databases. It does **not** modify `dbiwc127wc`.
+This report times the INT→BIGINT and folder-redesign SQL pipeline against isolated `test_wc_*` databases.
 
 ## Environment
 
@@ -174,7 +174,7 @@ Duration in seconds for each statement. **Step 3** (`item.folder_id` → BIGINT)
 
 These are planning notes from this benchmark, not a go-live runbook.
 
-1. **Do not run this playbook against `dbiwc127wc`.** Use a restore of production on comparable hardware, or treat these numbers as a lower bound only if the test host is smaller than production.
+1. **Do not run this playbook against any production database.** Use a restore of production on comparable hardware, or treat these numbers as a lower bound only if the test host is smaller than production.
 2. **COPY DDL needs spare disk equal to the table.** Step 3 and Step 6 rewrite `item`. Keep at least `data_length + index_length` free on the datadir (this playbook budgets 2.5×). Monitor `df` during the run.
 3. **Buffer pool vs table size.** If `item` is larger than `innodb_buffer_pool_size`, rebuilds become I/O bound. Size the pool for production so the working set of secondary indexes fits as much as possible, but do not expect a 1B-row table to be cached.
 4. **Locking / availability.** In-place `ALTER TABLE ... MODIFY` to BIGINT on a PK or indexed column typically rebuilds the table and blocks writes (and often reads). If the measured Step 3 or Step 6 duration is longer than the allowed maintenance window, evaluate `pt-online-schema-change` or `gh-ost` (or MySQL 8 instant/inplace only where the manual confirms the change qualifies — INT→BIGINT PK does **not**).

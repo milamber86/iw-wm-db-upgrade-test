@@ -1,4 +1,4 @@
--- Current IceWarp webclient schema (dbiwc127wc equivalent).
+-- Current IceWarp webclient schema (v14.3.0.8).
 -- Applied to disposable test_wc_* databases only.
 
 CREATE TABLE `folder` (

@@ -2,7 +2,7 @@
 
 Ansible project that SSHs onto an existing **MySQL 8** server, creates isolated test databases, bulk-loads realistic `item` rows, times every statement in the IceWarp webclient INT→BIGINT / folder-redesign migration, and writes `reports/migration_benchmark_report.md`.
 
-It never touches `dbiwc127wc`. Each scale uses a disposable database:
+It never touches any already existing database. Each scale uses a disposable database:
 
 | Rows | Database |
 |------|----------|
@@ -89,6 +89,6 @@ Step 6 converts `item.item_id` to `BIGINT` while `snoozed_item.snoozed_item_id` 
 
 ## Safety
 
-- Target names are always `test_wc_*`. `dbiwc127wc` is in `forbidden_databases`.
+- Target names are always `test_wc_*`.
 - `enable_load_tuning` changes **global** `innodb_flush_log_at_trx_commit` and `sync_binlog` on the instance. Leave it off on shared servers.
 - Default `keep_database: false` drops the test DB after metrics so 100M and 1B can share disk.
