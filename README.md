@@ -7,7 +7,9 @@ It never touches any already existing database. Each scale uses a disposable dat
 | Rows | Database |
 |------|----------|
 | 1,000,000 | `test_wc_1m` |
+| 10,000,000 | `test_wc_10m` |
 | 100,000,000 | `test_wc_100m` |
+| 500,000,000 | `test_wc_500m` |
 | 1,000,000,000 | `test_wc_1b` |
 | other | `test_wc_<N>r` |
 
@@ -33,7 +35,9 @@ InnoDB `COPY` DDL duplicates the table. Budget **~2.5×** the loaded size as fre
 | Scale | Data + indexes (rough) | Free space to plan | Runtime |
 |-------|------------------------|--------------------|---------|
 | 1M | ~2 GiB | ~5 GiB | minutes |
+| 10M | ~20 GiB | ~50 GiB | tens of minutes |
 | 100M | ~200 GiB | ~500 GiB | hours |
+| 500M | ~1 TiB | ~2.5 TiB | many hours |
 | 1B | ~2 TiB | ~4–5 TiB | many hours to days |
 
 The 1B tier refuses to start unless you pass `-e confirm_1b=true`.
@@ -54,14 +58,20 @@ ansible-playbook site.yml -e '{"row_counts": [1000000]}'
 # Same via preset
 ansible-playbook site.yml -e row_count_preset=1m
 
+# 10M
+ansible-playbook site.yml -e row_count_preset=10m
+
 # 100M
 ansible-playbook site.yml -e row_count_preset=100m
+
+# 500M
+ansible-playbook site.yml -e row_count_preset=500m
 
 # 1B (explicit confirmation required)
 ansible-playbook site.yml -e row_count_preset=1b -e confirm_1b=true
 
-# All three scales from group_vars (1B still needs confirm_1b)
-ansible-playbook site.yml -e confirm_1b=true
+# All named scales (1B still needs confirm_1b)
+ansible-playbook site.yml -e row_count_preset=all -e confirm_1b=true
 ```
 
 Optional:
@@ -91,4 +101,4 @@ Step 6 converts `item.item_id` to `BIGINT` while `snoozed_item.snoozed_item_id` 
 
 - Target names are always `test_wc_*`.
 - `enable_load_tuning` changes **global** `innodb_flush_log_at_trx_commit` and `sync_binlog` on the instance. Leave it off on shared servers.
-- Default `keep_database: false` drops the test DB after metrics so 100M and 1B can share disk.
+- Default `keep_database: false` drops the test DB after metrics so later tiers (100M / 500M / 1B) can share disk.

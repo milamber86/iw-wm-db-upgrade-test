@@ -6,15 +6,17 @@
   vars:
     _preset_map:
       "1m": [1000000]
+      "10m": [10000000]
       "100m": [100000000]
+      "500m": [500000000]
       "1b": [1000000000]
-      "all": [1000000, 100000000, 1000000000]
+      "all": [1000000, 10000000, 100000000, 500000000, 1000000000]
 
 - name: Validate row_count_preset
   ansible.builtin.assert:
     that:
-      - row_count_preset | default('') | length == 0 or row_count_preset in ['1m', '100m', '1b', 'all']
-    fail_msg: "row_count_preset must be one of: 1m, 100m, 1b, all"
+      - row_count_preset | default('') | length == 0 or row_count_preset in ['1m', '10m', '100m', '500m', '1b', 'all']
+    fail_msg: "row_count_preset must be one of: 1m, 10m, 100m, 500m, 1b, all"
 
 - name: Validate row_counts
   ansible.builtin.assert:

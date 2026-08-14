@@ -1,15 +1,11 @@
 ---
 - name: Resolve tier database name
   ansible.builtin.set_fact:
-    tier_db_name: >-
-      {{
-        {
-          '1000000': 'test_wc_1m',
-          '100000000': 'test_wc_100m',
-          '1000000000': 'test_wc_1b'
-        }.get(target_rows | string, 'test_wc_' ~ (target_rows | string) ~ 'r')
-      }}
-    remote_statements_file: "{{ resolved_work_dir }}/results_{{ {'1000000': 'test_wc_1m', '100000000': 'test_wc_100m', '1000000000': 'test_wc_1b'}.get(target_rows | string, 'test_wc_' ~ (target_rows | string) ~ 'r') }}_statements.json"
+    tier_db_name: "{{ scale_db_names[(target_rows | string)] | default('test_wc_' ~ (target_rows | string) ~ 'r') }}"
+
+- name: Set statements log path
+  ansible.builtin.set_fact:
+    remote_statements_file: "{{ resolved_work_dir }}/results_{{ tier_db_name }}_statements.json"
 
 - name: Benchmark tier {{ target_rows }}
   block:
