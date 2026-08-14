@@ -1,0 +1,118 @@
+---
+- name: Require confirm_1b for billion-row tier
+  ansible.builtin.assert:
+    that:
+      - confirm_1b | bool
+    fail_msg: >-
+      The 1B-row tier needs several TiB free and can run for days.
+      Re-run with -e confirm_1b=true if that is intentional.
+  when: (target_rows | int) >= 1000000000
+
+- name: Reject forbidden database names
+  ansible.builtin.assert:
+    that:
+      - tier_db_name not in forbidden_databases
+      - not (tier_db_name | regex_search('^dbiwc'))
+    fail_msg: "Refusing to use database '{{ tier_db_name }}' (forbidden / production-like name)."
+
+- name: Compute disk requirement for this tier
+  ansible.builtin.set_fact:
+    tier_required_bytes: "{{ ((target_rows | int) * (bytes_per_item_estimate | int) * 2.5) | int }}"
+    current_tier:
+      rows: "{{ target_rows | int }}"
+      database: "{{ tier_db_name }}"
+      failed: false
+      error: null
+      statements: []
+      seed: {}
+      pre_size: {}
+      post_size: {}
+      total_migration_seconds: 0
+
+- name: Refresh datadir free space
+  ansible.builtin.command:
+    argv: [df, -B1, -P, "{{ mysql_datadir }}"]
+  register: tier_df
+  changed_when: false
+
+- name: Assert enough free disk
+  ansible.builtin.assert:
+    that:
+      - (tier_df.stdout_lines[-1].split()[3] | int) >= (tier_required_bytes | int)
+    fail_msg: >-
+      Datadir {{ mysql_datadir }} has
+      {{ tier_df.stdout_lines[-1].split()[3] }} bytes free;
+      this tier estimates {{ tier_required_bytes }} bytes
+      (rows × {{ bytes_per_item_estimate }} × 2.5 for COPY ALTER).
+      Override with -e skip_disk_check=true.
+  when: not (skip_disk_check | bool)
+
+- name: Initialize crash-safe statements log
+  ansible.builtin.copy:
+    dest: "{{ remote_statements_file }}"
+    content: "[]\n"
+    mode: "0644"
+
+- name: Create schema
+  ansible.builtin.import_tasks: create_schema.yml
+
+- name: Seed data
+  ansible.builtin.import_tasks: seed_data.yml
+
+- name: Run migration
+  ansible.builtin.import_tasks: run_migration.yml
+
+- name: Snapshot post-migration table sizes
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ remote_scripts_dir }}/timed_sql.py"
+      - --defaults-extra-file
+      - "{{ mysql_defaults_file }}"
+      - --database
+      - "{{ tier_db_name }}"
+      - --mysql-bin
+      - "{{ mysql_bin }}"
+      - --snapshot-only
+  register: post_snap_raw
+  changed_when: false
+
+- name: Load statements log
+  ansible.builtin.slurp:
+    src: "{{ remote_statements_file }}"
+  register: statements_slurp
+
+- name: Compute migration totals
+  ansible.builtin.set_fact:
+    _tier_statements: "{{ statements_slurp.content | b64decode | from_json }}"
+    _tier_post_tables: "{{ (post_snap_raw.stdout | from_json).tables }}"
+
+- name: Finalize current tier
+  ansible.builtin.set_fact:
+    current_tier: "{{ current_tier | combine(_tier_final, recursive=true) }}"
+    benchmark_run: "{{ benchmark_run | combine({'tiers': (benchmark_run.tiers | default([])) + [current_tier | combine(_tier_final, recursive=true)]}, recursive=false) }}"
+  vars:
+    _elapsed_sum: "{{ _tier_statements | selectattr('status', 'ne', 'skipped') | map(attribute='elapsed_seconds') | map('float') | sum }}"
+    _tier_final:
+      statements: "{{ _tier_statements }}"
+      post_size:
+        tables: "{{ _tier_post_tables }}"
+        data_length: "{{ _tier_post_tables.values() | map(attribute='data_length') | map('int') | sum }}"
+        index_length: "{{ _tier_post_tables.values() | map(attribute='index_length') | map('int') | sum }}"
+        total_length: "{{ _tier_post_tables.values() | map(attribute='total_length') | map('int') | sum }}"
+      total_migration_seconds: "{{ _elapsed_sum | float }}"
+      failed: false
+
+- name: Generate report
+  ansible.builtin.import_tasks: generate_report.yml
+
+- name: Drop test database after metrics
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - -e
+      - DROP DATABASE IF EXISTS `{{ tier_db_name }}`
+  when: not (keep_database | bool)
+  register: drop_after
+  changed_when: drop_after.rc == 0

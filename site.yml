@@ -1,0 +1,7 @@
+---
+- name: IceWarp webclient DB migration benchmark
+  hosts: mysql
+  gather_facts: true
+  become: false
+  roles:
+    - role: db_benchmark

@@ -1,0 +1,7 @@
+---
+- name: Execute each migration statement
+  ansible.builtin.include_tasks: run_statement.yml
+  loop: "{{ migration_file.migration_steps }}"
+  loop_control:
+    loop_var: mig_stmt
+    label: "step {{ mig_stmt.step }} {{ mig_stmt.name }}"

@@ -1,0 +1,60 @@
+---
+# Target row counts. Override at the CLI, for example:
+#   ansible-playbook site.yml -e '{"row_counts": [1000000]}'
+#   ansible-playbook site.yml -e row_count_preset=1m
+row_counts:
+  - 1000000
+  - 100000000
+  - 1000000000
+
+# Optional preset: 1m | 100m | 1b | all (empty = use row_counts as-is)
+row_count_preset: ""
+
+# 1B tier refuses to run unless explicitly confirmed (disk + multi-day DDL).
+confirm_1b: false
+
+# Bulk load
+batch_size: 250000
+seed_workers: 4
+accounts_per_million: 100
+folders_per_account: 10
+snooze_rate: 0.001
+seed_rng_seed: 42
+
+# Staging for TSV + scripts. "auto" = @@secure_file_priv/wc_bench, else /var/tmp/wc_bench
+staging_dir: auto
+
+# Drop the test database after metrics are captured so later tiers can reuse disk.
+keep_database: false
+
+# Opt-in GLOBAL InnoDB tunables during LOAD DATA (always restored afterwards).
+# Affects the whole MySQL instance — leave false on shared servers.
+enable_load_tuning: false
+load_tuning_innodb_flush_log_at_trx_commit: 0
+load_tuning_sync_binlog: 0
+
+# Add production FKs after seed so Step 1 DROP FOREIGN KEY is a real timed operation.
+apply_source_fks_after_seed: true
+
+# Step 6 promotes item.item_id to BIGINT; snoozed_item.snoozed_item_id stays INT.
+# If Step 7 FK fails with a type mismatch, ALTER snoozed_item_id to BIGINT and retry.
+fix_fk_type_mismatch: true
+
+# Disk preflight: require free bytes >= rows * this * 2.5 (COPY ALTER duplicates the table).
+bytes_per_item_estimate: 2048
+skip_disk_check: false
+
+# Async timeout for long ALTER / DELETE (seconds). Default 3 days.
+mysql_ddl_timeout_sec: 259200
+mysql_ddl_poll_sec: 30
+
+# If a tier fails, continue with the next row count (report still written).
+continue_on_tier_failure: false
+
+# Never used as a target; documented so inventory mistakes are obvious.
+forbidden_databases:
+  - dbiwc127wc
+  - mysql
+  - sys
+  - information_schema
+  - performance_schema

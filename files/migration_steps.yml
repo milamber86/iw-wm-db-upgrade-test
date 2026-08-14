@@ -1,0 +1,242 @@
+---
+# One timed statement per entry. optional=true skips when the constraint is absent.
+migration_steps:
+  - step: 1
+    name: drop_fk_item_folder
+    sql: ALTER TABLE item DROP FOREIGN KEY FK_item_folder
+    optional: true
+    constraint_schema_table: item
+    constraint_name: FK_item_folder
+    tables:
+      - item
+
+  - step: 1
+    name: drop_fk_snoozed_item
+    sql: ALTER TABLE snoozed_item DROP FOREIGN KEY _snoozed_item_ibfk_1
+    optional: true
+    constraint_schema_table: snoozed_item
+    constraint_name: _snoozed_item_ibfk_1
+    tables:
+      - snoozed_item
+
+  - step: 2
+    name: folder_id_to_bigint
+    sql: ALTER TABLE folder MODIFY COLUMN folder_id BIGINT NOT NULL AUTO_INCREMENT, MODIFY COLUMN parent_folder_id BIGINT, MODIFY COLUMN sync_in_progress_folder_id BIGINT
+    tables:
+      - folder
+
+  - step: 3
+    name: item_folder_id_to_bigint
+    highlight: true
+    sql: ALTER TABLE item MODIFY COLUMN folder_id BIGINT NOT NULL
+    tables:
+      - item
+
+  - step: 4
+    name: delete_orphan_items
+    sql: DELETE item FROM item LEFT JOIN folder ON item.folder_id = folder.folder_id WHERE folder.folder_id IS NULL
+    tables:
+      - item
+      - folder
+
+  - step: 4
+    name: delete_orphan_snoozed_items
+    sql: DELETE snoozed_item FROM snoozed_item LEFT JOIN item ON item_id = snoozed_item_id WHERE item_id IS NULL
+    tables:
+      - snoozed_item
+      - item
+
+  - step: 5
+    name: add_fk_item_folder
+    sql: ALTER TABLE item ADD CONSTRAINT FK_item_folder FOREIGN KEY (folder_id) REFERENCES folder(folder_id) ON DELETE CASCADE ON UPDATE CASCADE
+    tables:
+      - item
+      - folder
+
+  - step: 6
+    name: item_pk_and_int_to_bigint
+    highlight: true
+    sql: ALTER TABLE item MODIFY COLUMN item_id BIGINT NOT NULL AUTO_INCREMENT, MODIFY COLUMN size BIGINT NOT NULL, MODIFY COLUMN source_folder_id BIGINT, MODIFY COLUMN dummy_id BIGINT
+    tables:
+      - item
+
+  - step: 7
+    name: add_fk_snoozed_item_item
+    sql: ALTER TABLE snoozed_item ADD CONSTRAINT FK_snoozed_item_item FOREIGN KEY (snoozed_item_id) REFERENCES item(item_id) ON DELETE CASCADE ON UPDATE CASCADE
+    tables:
+      - snoozed_item
+      - item
+
+  - step: 8
+    name: rename_folder_to_folders
+    sql: RENAME TABLE folder TO folders
+    tables:
+      - folders
+
+  - step: 8
+    name: create_table_account
+    sql: >
+      CREATE TABLE account (
+        acc_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+        account_id VARCHAR(255) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+        CONSTRAINT UQ_account_account_id UNIQUE (account_id)
+      )
+    tables:
+      - account
+
+  - step: 8
+    name: insert_account_distinct
+    sql: INSERT INTO account (account_id) SELECT DISTINCT account_id FROM folders
+    tables:
+      - account
+      - folders
+
+  - step: 8
+    name: analyze_account
+    sql: ANALYZE TABLE account
+    tables:
+      - account
+
+  - step: 8
+    name: folders_add_own_acc_id
+    sql: ALTER TABLE folders ADD COLUMN own_acc_id BIGINT
+    tables:
+      - folders
+
+  - step: 8
+    name: folders_update_own_acc_id
+    sql: UPDATE folders f INNER JOIN account a ON a.account_id = f.account_id SET f.own_acc_id = a.acc_id
+    tables:
+      - folders
+      - account
+
+  - step: 8
+    name: create_table_account_folders
+    sql: >
+      CREATE TABLE account_folders (
+        acc_id BIGINT NOT NULL,
+        folder_id BIGINT NOT NULL,
+        rights INTEGER DEFAULT 0 NOT NULL,
+        subscription_type text,
+        attributes INTEGER DEFAULT 0 NOT NULL,
+        sync VARCHAR(1),
+        name VARCHAR(704) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_ci NOT NULL,
+        PRIMARY KEY (acc_id, folder_id),
+        CONSTRAINT FdrName UNIQUE (acc_id, name),
+        CONSTRAINT FK_af_account FOREIGN KEY (acc_id) REFERENCES account (acc_id) ON DELETE CASCADE,
+        CONSTRAINT FK_af_folder FOREIGN KEY (folder_id) REFERENCES folders (folder_id) ON DELETE CASCADE
+      )
+    tables:
+      - account_folders
+
+  - step: 8
+    name: insert_account_folders
+    sql: >
+      INSERT INTO account_folders (acc_id, folder_id, name, rights, subscription_type, attributes, sync)
+      SELECT a.acc_id, f.folder_id, f.name, f.rights, f.subscription_type, f.attributes, f.sync
+      FROM folders f INNER JOIN account a ON a.account_id = f.account_id
+    tables:
+      - account_folders
+      - folders
+      - account
+
+  - step: 8
+    name: analyze_account_folders
+    sql: ANALYZE TABLE account_folders
+    tables:
+      - account_folders
+
+  - step: 8
+    name: folders_drop_index_FdrName
+    sql: ALTER TABLE folders DROP INDEX FdrName
+    tables:
+      - folders
+
+  - step: 8
+    name: folders_drop_index_IDX_folder_name
+    sql: ALTER TABLE folders DROP INDEX IDX_folder_name
+    tables:
+      - folders
+
+  - step: 8
+    name: folders_drop_index_IDX_folder_parent
+    sql: ALTER TABLE folders DROP INDEX IDX_folder_parent
+    tables:
+      - folders
+
+  - step: 8
+    name: folders_drop_index_IDX_folder_account
+    sql: ALTER TABLE folders DROP INDEX IDX_folder_account
+    tables:
+      - folders
+
+  - step: 8
+    name: folders_drop_account_columns_add_fk
+    sql: >
+      ALTER TABLE folders
+      DROP COLUMN account_id,
+      DROP COLUMN rights,
+      DROP COLUMN subscription_type,
+      DROP COLUMN name,
+      DROP COLUMN attributes,
+      DROP COLUMN sync,
+      MODIFY COLUMN own_acc_id BIGINT NOT NULL,
+      ADD CONSTRAINT FK_f_folder FOREIGN KEY (own_acc_id) REFERENCES account (acc_id) ON DELETE CASCADE
+    tables:
+      - folders
+
+  - step: 9
+    name: snoozed_add_snoozed_acc_id
+    sql: ALTER TABLE snoozed_item ADD COLUMN snoozed_acc_id BIGINT
+    tables:
+      - snoozed_item
+
+  - step: 9
+    name: snoozed_update_acc_id
+    sql: UPDATE snoozed_item si INNER JOIN account a ON a.account_id = si.snoozed_account_id SET si.snoozed_acc_id = a.acc_id
+    tables:
+      - snoozed_item
+      - account
+
+  - step: 9
+    name: snoozed_drop_index_IDX_snoozed_date
+    sql: ALTER TABLE snoozed_item DROP INDEX IDX_snoozed_date
+    tables:
+      - snoozed_item
+
+  - step: 9
+    name: snoozed_drop_account_id_add_fk
+    sql: >
+      ALTER TABLE snoozed_item
+      DROP COLUMN snoozed_account_id,
+      MODIFY COLUMN snoozed_acc_id BIGINT NOT NULL,
+      ADD CONSTRAINT FK_s_account FOREIGN KEY (snoozed_acc_id) REFERENCES account (acc_id) ON DELETE CASCADE
+    tables:
+      - snoozed_item
+
+  - step: 9
+    name: snoozed_create_index_IDX_snoozed_date
+    sql: CREATE INDEX IDX_snoozed_date ON snoozed_item (snoozed_acc_id, original_date DESC)
+    tables:
+      - snoozed_item
+
+  - step: 10
+    name: create_view_folder
+    sql: >
+      CREATE VIEW folder AS
+      SELECT f.folder_id, f.parent_folder_id, a.account_id, a.acc_id, af.name, af.rights,
+             af.attributes, af.sync, f.path, f.uid_validity, f.sync_update, f.unseen,
+             f.messages, af.subscription_type, f.sync_in_progress_folder_id
+      FROM folders f
+      INNER JOIN account_folders af ON af.folder_id = f.folder_id
+      INNER JOIN account a ON a.acc_id = af.acc_id
+    tables:
+      - folders
+      - account_folders
+      - account
+
+  - step: 10
+    name: insert_metadata_version
+    sql: INSERT INTO metadata (item_key, item_value) VALUES ('wc_14.4.0.0 (2026-07-15)','1')
+    tables:
+      - metadata

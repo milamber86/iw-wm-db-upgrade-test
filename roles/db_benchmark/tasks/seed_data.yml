@@ -1,0 +1,114 @@
+---
+- name: Seed {{ tier_db_name }} with {{ target_rows }} item rows
+  block:
+    - name: Read global tunables before optional load tuning
+      ansible.builtin.command:
+        argv:
+          - "{{ mysql_bin }}"
+          - --defaults-extra-file={{ mysql_defaults_file }}
+          - --batch
+          - --raw
+          - --skip-column-names
+          - -e
+          - SELECT @@GLOBAL.innodb_flush_log_at_trx_commit, @@GLOBAL.sync_binlog
+      register: saved_tuning_raw
+      changed_when: false
+      when: enable_load_tuning | bool
+
+    - name: Save tunables
+      ansible.builtin.set_fact:
+        saved_flush_log: "{{ saved_tuning_raw.stdout.split('\t')[0] | trim }}"
+        saved_sync_binlog: "{{ saved_tuning_raw.stdout.split('\t')[1] | trim }}"
+      when: enable_load_tuning | bool
+
+    - name: Apply opt-in GLOBAL load tunables
+      ansible.builtin.command:
+        argv:
+          - "{{ mysql_bin }}"
+          - --defaults-extra-file={{ mysql_defaults_file }}
+          - -e
+          - >-
+            SET GLOBAL innodb_flush_log_at_trx_commit={{ load_tuning_innodb_flush_log_at_trx_commit }};
+            SET GLOBAL sync_binlog={{ load_tuning_sync_binlog }}
+      when: enable_load_tuning | bool
+
+    - name: Run high-speed data generator
+      ansible.builtin.command:
+        argv: "{{ _seed_argv + _fk_flag }}"
+      become: true
+      vars:
+        _seed_argv:
+          - python3
+          - "{{ remote_scripts_dir }}/fast_data_generator.py"
+          - --defaults-extra-file
+          - "{{ mysql_defaults_file }}"
+          - --database
+          - "{{ tier_db_name }}"
+          - --mysql-bin
+          - "{{ mysql_bin }}"
+          - --rows
+          - "{{ target_rows | string }}"
+          - --batch-size
+          - "{{ batch_size | string }}"
+          - --workers
+          - "{{ seed_workers | string }}"
+          - --staging-dir
+          - "{{ resolved_staging_dir }}"
+          - --accounts-per-million
+          - "{{ accounts_per_million | string }}"
+          - --folders-per-account
+          - "{{ folders_per_account | string }}"
+          - --snooze-rate
+          - "{{ snooze_rate | string }}"
+          - --session-timeout
+          - "{{ mysql_session_timeout_sec | string }}"
+        _fk_flag: "{{ ['--apply-source-fks'] if (apply_source_fks_after_seed | bool) else [] }}"
+      async: "{{ mysql_ddl_timeout_sec | int }}"
+      poll: "{{ mysql_ddl_poll_sec | int }}"
+      register: seed_async
+
+    - name: Parse seed summary
+      ansible.builtin.set_fact:
+        seed_summary: "{{ seed_async.stdout | from_json }}"
+
+    - name: Snapshot pre-migration table sizes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ remote_scripts_dir }}/timed_sql.py"
+          - --defaults-extra-file
+          - "{{ mysql_defaults_file }}"
+          - --database
+          - "{{ tier_db_name }}"
+          - --mysql-bin
+          - "{{ mysql_bin }}"
+          - --snapshot-only
+      register: pre_snap_raw
+      changed_when: false
+
+    - name: Store seed metrics on current tier
+      ansible.builtin.set_fact:
+        current_tier: "{{ current_tier | combine({'seed': seed_summary, 'pre_size': _pre}, recursive=true) }}"
+      vars:
+        _tables: "{{ (pre_snap_raw.stdout | from_json).tables }}"
+        _pre:
+          tables: "{{ _tables }}"
+          data_length: "{{ _tables.values() | map(attribute='data_length') | map('int') | sum }}"
+          index_length: "{{ _tables.values() | map(attribute='index_length') | map('int') | sum }}"
+          total_length: "{{ _tables.values() | map(attribute='total_length') | map('int') | sum }}"
+
+  always:
+    - name: Restore GLOBAL tunables
+      ansible.builtin.command:
+        argv:
+          - "{{ mysql_bin }}"
+          - --defaults-extra-file={{ mysql_defaults_file }}
+          - -e
+          - >-
+            SET GLOBAL innodb_flush_log_at_trx_commit={{ saved_flush_log }};
+            SET GLOBAL sync_binlog={{ saved_sync_binlog }}
+      when:
+        - enable_load_tuning | bool
+        - saved_flush_log is defined
+        - saved_sync_binlog is defined
+      failed_when: false

@@ -1,0 +1,4 @@
+---
+# This project uses the mysql CLI and Python 3 stdlib on the database host.
+# No Ansible collections are required.
+collections: []

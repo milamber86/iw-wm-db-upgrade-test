@@ -1,0 +1,32 @@
+---
+- name: Drop test database if it exists
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - -e
+      - DROP DATABASE IF EXISTS `{{ tier_db_name }}`
+  register: drop_db
+  changed_when: true
+
+- name: Create test database
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - -e
+      - >-
+        CREATE DATABASE `{{ tier_db_name }}`
+        CHARACTER SET utf8mb4 COLLATE utf8mb4_czech_ci
+  register: create_db
+  changed_when: true
+
+- name: Apply production-equivalent schema
+  ansible.builtin.shell: >
+    {{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }}
+    --default-character-set=utf8mb4
+    {{ tier_db_name }} < {{ remote_schema_path }}
+  args:
+    executable: /bin/bash
+  register: apply_schema
+  changed_when: true

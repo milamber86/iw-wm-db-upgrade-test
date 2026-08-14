@@ -1,0 +1,77 @@
+---
+- name: Query MySQL variables
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - >-
+        SHOW VARIABLES WHERE Variable_name IN (
+          'innodb_buffer_pool_size','innodb_ddl_threads','innodb_parallel_read_threads',
+          'innodb_autoinc_lock_mode','innodb_flush_log_at_trx_commit','sync_binlog',
+          'datadir','version','version_comment','secure_file_priv','innodb_file_per_table',
+          'innodb_page_size','max_allowed_packet','version_compile_os','version_compile_machine'
+        )
+  register: mysql_vars_raw
+  changed_when: false
+
+- name: Parse MySQL variables
+  ansible.builtin.set_fact:
+    mysql_vars: >-
+      {%- set ns = namespace(d={}) -%}
+      {%- for line in mysql_vars_raw.stdout_lines -%}
+        {%- set parts = line.split('\t') -%}
+        {%- if parts | length >= 2 -%}
+          {%- set ns.d = ns.d | combine({parts[0]: parts[1]}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.d }}
+
+- name: Measure datadir free space
+  ansible.builtin.command:
+    argv: [df, -B1, -P, "{{ mysql_datadir }}"]
+  register: datadir_df
+  changed_when: false
+
+- name: Parse datadir df
+  ansible.builtin.set_fact:
+    datadir_df_total_bytes: "{{ datadir_df.stdout_lines[-1].split()[1] | int }}"
+    datadir_df_used_bytes: "{{ datadir_df.stdout_lines[-1].split()[2] | int }}"
+    datadir_df_avail_bytes: "{{ datadir_df.stdout_lines[-1].split()[3] | int }}"
+
+- name: Build environment block
+  ansible.builtin.set_fact:
+    bench_env:
+      hostname: "{{ ansible_hostname }}"
+      fqdn: "{{ ansible_fqdn | default(ansible_hostname) }}"
+      ansible_host: "{{ ansible_host }}"
+      distribution: "{{ ansible_distribution | default('unknown') }} {{ ansible_distribution_version | default('') }}"
+      architecture: "{{ ansible_architecture | default('') }}"
+      cpu_cores: "{{ ansible_processor_vcpus | default(ansible_processor_count) | default('unknown') }}"
+      ram_mb: "{{ (ansible_memtotal_mb | default(0)) | int }}"
+      python_version: "{{ python3_ver.stdout | default('') }}"
+      mysql_client: "{{ mysql_client_ver.stdout | default('') }}"
+      mysql_version: "{{ mysql_version_full }}"
+      mysql_vars: "{{ mysql_vars }}"
+      innodb_buffer_pool_size: "{{ mysql_innodb_buffer_pool_size | int }}"
+      innodb_ddl_threads: "{{ mysql_vars['innodb_ddl_threads'] | default('n/a') }}"
+      innodb_parallel_read_threads: "{{ mysql_vars['innodb_parallel_read_threads'] | default('n/a') }}"
+      innodb_autoinc_lock_mode: "{{ mysql_vars['innodb_autoinc_lock_mode'] | default('n/a') }}"
+      datadir: "{{ mysql_datadir }}"
+      datadir_avail_bytes: "{{ datadir_df_avail_bytes | int }}"
+      datadir_total_bytes: "{{ datadir_df_total_bytes | int }}"
+      secure_file_priv: "{{ mysql_secure_file_priv_raw }}"
+      staging_dir: "{{ resolved_staging_dir }}"
+      work_dir: "{{ resolved_work_dir }}"
+      collected_at: "{{ ansible_date_time.iso8601 }}"
+    benchmark_run:
+      generated_at: "{{ ansible_date_time.iso8601 }}"
+      env: {}
+      tiers: []
+
+- name: Attach env to benchmark_run
+  ansible.builtin.set_fact:
+    benchmark_run: "{{ benchmark_run | combine({'env': bench_env}, recursive=true) }}"

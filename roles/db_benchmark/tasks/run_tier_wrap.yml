@@ -1,0 +1,46 @@
+---
+- name: Resolve tier database name
+  ansible.builtin.set_fact:
+    tier_db_name: >-
+      {{
+        {
+          '1000000': 'test_wc_1m',
+          '100000000': 'test_wc_100m',
+          '1000000000': 'test_wc_1b'
+        }.get(target_rows | string, 'test_wc_' ~ (target_rows | string) ~ 'r')
+      }}
+    remote_statements_file: "{{ resolved_work_dir }}/results_{{ {'1000000': 'test_wc_1m', '100000000': 'test_wc_100m', '1000000000': 'test_wc_1b'}.get(target_rows | string, 'test_wc_' ~ (target_rows | string) ~ 'r') }}_statements.json"
+
+- name: Benchmark tier {{ target_rows }}
+  block:
+    - ansible.builtin.include_tasks: run_tier.yml
+  rescue:
+    - name: Load partial statements log after failure
+      ansible.builtin.slurp:
+        src: "{{ remote_statements_file }}"
+      register: failed_statements_slurp
+      failed_when: false
+
+    - name: Record failed tier
+      ansible.builtin.set_fact:
+        benchmark_run: "{{ benchmark_run | combine({'tiers': (benchmark_run.tiers | default([])) + [_fail_tier]}, recursive=false) }}"
+      vars:
+        _partial_statements: "{{ (failed_statements_slurp.content | default('') | b64decode | from_json) if (failed_statements_slurp.content is defined) else (current_tier.statements | default([])) }}"
+        _fail_tier:
+          rows: "{{ target_rows | int }}"
+          database: "{{ tier_db_name }}"
+          failed: true
+          error: "{{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default(ansible_failed_result | to_json)) }}"
+          statements: "{{ _partial_statements }}"
+          seed: "{{ current_tier.seed | default({}) }}"
+          pre_size: "{{ current_tier.pre_size | default({}) }}"
+
+    - name: Write partial report after tier failure
+      ansible.builtin.include_tasks: generate_report.yml
+
+    - name: Fail the play unless continue_on_tier_failure
+      ansible.builtin.fail:
+        msg: >-
+          Tier {{ target_rows }} ({{ tier_db_name }}) failed.
+          Re-run with -e continue_on_tier_failure=true to proceed to the next scale.
+      when: not (continue_on_tier_failure | bool)

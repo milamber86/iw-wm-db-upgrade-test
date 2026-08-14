@@ -1,0 +1,45 @@
+---
+row_counts:
+  - 1000000
+row_count_preset: ""
+confirm_1b: false
+
+batch_size: 250000
+seed_workers: 4
+accounts_per_million: 100
+folders_per_account: 10
+snooze_rate: 0.001
+seed_rng_seed: 42
+
+staging_dir: auto
+keep_database: false
+
+enable_load_tuning: false
+load_tuning_innodb_flush_log_at_trx_commit: 0
+load_tuning_sync_binlog: 0
+
+apply_source_fks_after_seed: true
+fix_fk_type_mismatch: true
+
+bytes_per_item_estimate: 2048
+skip_disk_check: false
+
+mysql_ddl_timeout_sec: 259200
+mysql_ddl_poll_sec: 30
+continue_on_tier_failure: false
+
+mysql_bin: mysql
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_user: root
+mysql_password: ""
+mysql_socket: ""
+
+forbidden_databases:
+  - dbiwc127wc
+  - mysql
+  - sys
+  - information_schema
+  - performance_schema
+
+mysql_session_timeout_sec: 259200

@@ -1,0 +1,202 @@
+{% macro human_bytes(n) -%}
+{%- set n = (n | default(0) | int) -%}
+{%- if n >= 1099511627776 -%}
+{{ '%0.2f' | format(n / 1099511627776) }} TiB
+{%- elif n >= 1073741824 -%}
+{{ '%0.2f' | format(n / 1073741824) }} GiB
+{%- elif n >= 1048576 -%}
+{{ '%0.2f' | format(n / 1048576) }} MiB
+{%- elif n >= 1024 -%}
+{{ '%0.1f' | format(n / 1024) }} KiB
+{%- else -%}
+{{ n }} B
+{%- endif -%}
+{%- endmacro %}
+{% macro scale_label(rows) -%}
+{%- if rows | int == 1000000 -%}1M
+{%- elif rows | int == 100000000 -%}100M
+{%- elif rows | int == 1000000000 -%}1B
+{%- else -%}{{ rows }}
+{%- endif -%}
+{%- endmacro %}
+{% set env = benchmark_run.env | default({}) %}
+{% set tiers = benchmark_run.tiers | default([]) %}
+{% set catalog = migration_file.migration_steps | default([]) %}
+# IceWarp webclient DB migration benchmark
+
+Generated: `{{ benchmark_run.generated_at | default('n/a') }}`
+
+This report times the INT→BIGINT and folder-redesign SQL pipeline against isolated `test_wc_*` databases. It does **not** modify `dbiwc127wc`.
+
+## Environment
+
+| Item | Value |
+|------|-------|
+| Host | {{ env.hostname | default('n/a') }} ({{ env.ansible_host | default('') }}) |
+| OS | {{ env.distribution | default('n/a') }} / {{ env.architecture | default('') }} |
+| CPU cores | {{ env.cpu_cores | default('n/a') }} |
+| RAM | {{ env.ram_mb | default(0) }} MiB |
+| MySQL version | {{ env.mysql_version | default('n/a') }} |
+| MySQL client | {{ env.mysql_client | default('n/a') }} |
+| `innodb_buffer_pool_size` | {{ human_bytes(env.innodb_buffer_pool_size | default(0)) }} ({{ env.innodb_buffer_pool_size | default(0) }} bytes) |
+| `innodb_ddl_threads` | {{ env.innodb_ddl_threads | default('n/a') }} |
+| `innodb_parallel_read_threads` | {{ env.innodb_parallel_read_threads | default('n/a') }} |
+| `innodb_autoinc_lock_mode` | {{ env.innodb_autoinc_lock_mode | default('n/a') }} |
+| datadir | `{{ env.datadir | default('n/a') }}` |
+| datadir free (at collection) | {{ human_bytes(env.datadir_avail_bytes | default(0)) }} / {{ human_bytes(env.datadir_total_bytes | default(0)) }} |
+| `secure_file_priv` | `{{ env.secure_file_priv | default('n/a') }}` |
+| TSV staging | `{{ env.staging_dir | default('n/a') }}` |
+| Work directory | `{{ env.work_dir | default('n/a') }}` |
+| Python | {{ env.python_version | default('n/a') }} |
+
+{% if env.mysql_vars is defined and env.mysql_vars %}
+Additional MySQL variables:
+
+| Variable | Value |
+|----------|-------|
+{% for k in env.mysql_vars | sort %}
+| `{{ k }}` | {{ env.mysql_vars[k] }} |
+{% endfor %}
+{% endif %}
+
+## Seeding method
+
+Secondary indexes are dropped, rows are loaded with `LOAD DATA INFILE`, then production indexes (and optional source FKs) are rebuilt **before** migration. `DISABLE KEYS` is a no-op on InnoDB and is not used. Index rebuild time is part of **seed**, not migration.
+
+## Per-tier results
+
+{% if tiers | length == 0 %}
+_No tiers completed._
+{% endif %}
+{% for tier in tiers %}
+### {{ scale_label(tier.rows) }} — `{{ tier.database }}` ({{ tier.rows }} rows)
+
+{% if tier.failed | default(false) %}
+**Tier failed:** {{ tier.error | default('unknown error') }}
+{% endif %}
+
+#### Seed / preparation
+
+| Metric | Value |
+|--------|-------|
+| Accounts | {{ tier.seed.account_count | default('n/a') }} |
+| Folders | {{ tier.seed.folder_count | default('n/a') }} |
+| Items | {{ tier.seed.item_count | default('n/a') }} |
+| Snoozed items | {{ tier.seed.snoozed_count | default('n/a') }} |
+| Total seed time | {{ tier.seed.elapsed_human | default(tier.seed.elapsed_seconds | default('n/a')) }} |
+| LOAD DATA time | {{ tier.seed.load_human | default(tier.seed.load_seconds | default('n/a')) }} |
+| Index rebuild time | {{ tier.seed.index_build_human | default(tier.seed.index_build_seconds | default('n/a')) }} |
+| Source FK time | {{ tier.seed.fk_seconds | default('n/a') }} s |
+| Workers / batch | {{ tier.seed.workers | default('n/a') }} / {{ tier.seed.batch_size | default('n/a') }} |
+
+#### Table size (data + index)
+
+| Phase | Data | Index | Total |
+|-------|------|-------|-------|
+| Pre-migration | {{ human_bytes(tier.pre_size.data_length | default(0)) }} | {{ human_bytes(tier.pre_size.index_length | default(0)) }} | {{ human_bytes(tier.pre_size.total_length | default(0)) }} |
+| Post-migration | {{ human_bytes(tier.post_size.data_length | default(0)) }} | {{ human_bytes(tier.post_size.index_length | default(0)) }} | {{ human_bytes(tier.post_size.total_length | default(0)) }} |
+| Growth | | | {{ human_bytes(((tier.post_size.total_length | default(0) | int) - (tier.pre_size.total_length | default(0) | int))) }} |
+
+{% if tier.pre_size.tables is defined %}
+Pre-migration per table:
+
+| Table | Rows (est.) | Data | Index | Total |
+|-------|-------------|------|-------|-------|
+{% for tname, tinfo in tier.pre_size.tables | dictsort %}
+| `{{ tname }}` | {{ tinfo.table_rows | default('') }} | {{ human_bytes(tinfo.data_length | default(0)) }} | {{ human_bytes(tinfo.index_length | default(0)) }} | {{ human_bytes(tinfo.total_length | default(0)) }} |
+{% endfor %}
+{% endif %}
+
+{% if tier.post_size.tables is defined %}
+Post-migration per table:
+
+| Table | Rows (est.) | Data | Index | Total |
+|-------|-------------|------|-------|-------|
+{% for tname, tinfo in tier.post_size.tables | dictsort %}
+| `{{ tname }}` | {{ tinfo.table_rows | default('') }} | {{ human_bytes(tinfo.data_length | default(0)) }} | {{ human_bytes(tinfo.index_length | default(0)) }} | {{ human_bytes(tinfo.total_length | default(0)) }} |
+{% endfor %}
+{% endif %}
+
+Total migration runtime: **{{ '%.3f' | format(tier.total_migration_seconds | default(0) | float) }} s**
+
+#### Statements
+
+| Step | Name | Status | Duration | Human | Data Δ | Index Δ | InnoDB written Δ |
+|------|------|--------|----------|-------|--------|---------|------------------|
+{% for st in tier.statements | default([]) %}
+| {{ st.step }}{% if st.step | int == 3 or st.step | int == 6 %} *{% endif %} | `{{ st.name }}` | {{ st.status }} | {{ '%.3f' | format(st.elapsed_seconds | default(0) | float) }} s | {{ st.elapsed_human | default('') }} | {{ human_bytes(st.data_delta_bytes | default(0)) }} | {{ human_bytes(st.index_delta_bytes | default(0)) }} | {{ human_bytes(st.innodb_data_written_delta | default(0)) }} |
+{% endfor %}
+
+{% set total_m = tier.total_migration_seconds | default(0) | float %}
+{% if total_m > 0 %}
+#### Bottlenecks (>80% of tier migration time)
+
+{% set ns_b = namespace(any=false) %}
+{% for st in tier.statements | default([]) %}
+{% if st.status != 'skipped' and (st.elapsed_seconds | default(0) | float) > (0.8 * total_m) %}
+{% set ns_b.any = true %}
+- **Step {{ st.step }} `{{ st.name }}`**: {{ st.elapsed_human }} ({{ '%.1f' | format((st.elapsed_seconds | float) / total_m * 100) }}% of {{ '%.1f' | format(total_m) }} s)
+  - SQL: `{{ st.sql | replace('\n', ' ') }}`
+{% endif %}
+{% endfor %}
+{% if not ns_b.any %}
+No single statement exceeded 80% of this tier's migration time.
+{% endif %}
+{% endif %}
+
+{% endfor %}
+
+## Comparison matrix
+
+Duration in seconds for each statement. **Step 3** (`item.folder_id` → BIGINT) and **Step 6** (PK / INT→BIGINT rebuild of `item`) are the expected heavy DDL.
+
+| Step | Statement | {% for tier in tiers %}{{ scale_label(tier.rows) }} | {% endfor %}
+|------|-----------|{% for tier in tiers %}------------|{% endfor %}
+{% for stepdef in catalog %}
+| {{ stepdef.step }}{% if stepdef.highlight | default(false) %} **\***{% endif %} | `{{ stepdef.name }}` | {% for tier in tiers %}{% set ns = namespace(cell='—') %}{% for st in tier.statements | default([]) %}{% if (st.step | string) == (stepdef.step | string) and st.name == stepdef.name %}{% if st.status == 'skipped' %}{% set ns.cell = 'skipped' %}{% elif st.status == 'failed' %}{% set ns.cell = 'FAILED' %}{% else %}{% set ns.cell = '%.3f' | format(st.elapsed_seconds | default(0) | float) %}{% endif %}{% endif %}{% endfor %}{{ ns.cell }} | {% endfor %}
+{% endfor %}
+{% set catalog_names = catalog | map(attribute='name') | list %}
+{% set ns_extra = namespace(names=[]) %}
+{% for tier in tiers %}
+{% for st in tier.statements | default([]) %}
+{% if st.name not in catalog_names and st.name not in ns_extra.names %}
+{% set ns_extra.names = ns_extra.names + [st.name] %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% for extra_name in ns_extra.names %}
+| extra | `{{ extra_name }}` | {% for t2 in tiers %}{% set ns = namespace(cell='—') %}{% for s2 in t2.statements | default([]) %}{% if s2.name == extra_name %}{% if s2.status == 'skipped' %}{% set ns.cell = 'skipped' %}{% elif s2.status == 'failed' %}{% set ns.cell = 'FAILED' %}{% else %}{% set ns.cell = '%.3f' | format(s2.elapsed_seconds | default(0) | float) %}{% endif %}{% endif %}{% endfor %}{{ ns.cell }} | {% endfor %}
+{% endfor %}
+
+\* Step 3 and Step 6 are the production-critical `item` rebuilds.
+
+## Recommendations for production
+
+These are planning notes from this benchmark, not a go-live runbook.
+
+1. **Do not run this playbook against `dbiwc127wc`.** Use a restore of production on comparable hardware, or treat these numbers as a lower bound only if the test host is smaller than production.
+2. **COPY DDL needs spare disk equal to the table.** Step 3 and Step 6 rewrite `item`. Keep at least `data_length + index_length` free on the datadir (this playbook budgets 2.5×). Monitor `df` during the run.
+3. **Buffer pool vs table size.** If `item` is larger than `innodb_buffer_pool_size`, rebuilds become I/O bound. Size the pool for production so the working set of secondary indexes fits as much as possible, but do not expect a 1B-row table to be cached.
+4. **Locking / availability.** In-place `ALTER TABLE ... MODIFY` to BIGINT on a PK or indexed column typically rebuilds the table and blocks writes (and often reads). If the measured Step 3 or Step 6 duration is longer than the allowed maintenance window, evaluate `pt-online-schema-change` or `gh-ost` (or MySQL 8 instant/inplace only where the manual confirms the change qualifies — INT→BIGINT PK does **not**).
+5. **Temporary InnoDB knobs (maintenance window only, then restore):**
+   - `innodb_flush_log_at_trx_commit=2` (or `0` on a dedicated box) and `sync_binlog=0` cut fsync cost during the copy; they raise crash-loss risk.
+   - `innodb_autoinc_lock_mode=2` (interleaved) helps parallel loaders; it is not runtime-changeable without a restart on many versions.
+   - MySQL 8.0.27+: raise `innodb_ddl_threads` / `innodb_parallel_read_threads` for parallel sort/rebuild if CPU and I/O have headroom.
+6. **Foreign keys.** Step 1 is a no-op unless FKs exist. This harness can add them after seed (`apply_source_fks_after_seed`). Step 5/7 FK validation scans `item` / `snoozed_item` — budget that time. Step 6 leaves `snoozed_item.snoozed_item_id` as INT while `item.item_id` becomes BIGINT; production SQL should convert `snoozed_item_id` before Step 7 (`fix_fk_type_mismatch` in this project).
+7. **Orphan deletes (Step 4).** With consistent seed data the `DELETE ... LEFT JOIN` still scans `item`. On 100M/1B that can rival an ALTER. Run `EXPLAIN` / consider chunked deletes in production if orphans are rare but the nested-loop join is not.
+8. **Step 8–9** are metadata-scale (folders/accounts), not `item`-scale, unless you have millions of folders. Still avoid mixing them in the same lock window as Step 6.
+9. **Start with 1M, then 100M, on production-like storage (same SSD/RAID, same `innodb_io_capacity`).** Do not extrapolate 1M durations linearly to 1B; rebuilds are roughly linear in table bytes plus a large constant for index build, and can go superlinear when the working set spills the buffer pool.
+
+{% set ns_rec = namespace(heavy=false) %}
+{% for tier in tiers %}
+{% set total_m = tier.total_migration_seconds | default(0) | float %}
+{% for st in tier.statements | default([]) %}
+{% if st.status != 'skipped' and total_m > 0 and (st.elapsed_seconds | default(0) | float) > (0.8 * total_m) and (st.step | int == 3 or st.step | int == 6) %}
+{% set ns_rec.heavy = true %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if ns_rec.heavy %}
+
+**This run:** Step 3 and/or Step 6 consumed more than 80% of at least one tier. Treat in-place ALTER as a maintenance-window operation, or switch those two statements to an online-schema-change tool after a rehearsal on a restored copy.
+{% endif %}

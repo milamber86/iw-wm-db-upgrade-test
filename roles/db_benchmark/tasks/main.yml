@@ -1,0 +1,42 @@
+---
+- name: Apply row_count_preset
+  ansible.builtin.set_fact:
+    row_counts: "{{ _preset_map[row_count_preset] }}"
+  when: row_count_preset | default('') | length > 0
+  vars:
+    _preset_map:
+      "1m": [1000000]
+      "100m": [100000000]
+      "1b": [1000000000]
+      "all": [1000000, 100000000, 1000000000]
+
+- name: Validate row_count_preset
+  ansible.builtin.assert:
+    that:
+      - row_count_preset | default('') | length == 0 or row_count_preset in ['1m', '100m', '1b', 'all']
+    fail_msg: "row_count_preset must be one of: 1m, 100m, 1b, all"
+
+- name: Validate row_counts
+  ansible.builtin.assert:
+    that:
+      - row_counts is iterable
+      - row_counts | length > 0
+    fail_msg: "row_counts must be a non-empty list of integers"
+
+- name: Load migration step catalog
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/files/migration_steps.yml"
+    name: migration_file
+
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Collect environment specs
+  ansible.builtin.import_tasks: collect_env.yml
+
+- name: Run benchmark tiers
+  ansible.builtin.include_tasks: run_tier_wrap.yml
+  loop: "{{ row_counts }}"
+  loop_control:
+    loop_var: target_rows
+    label: "{{ target_rows }} rows"

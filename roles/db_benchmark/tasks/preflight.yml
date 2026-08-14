@@ -1,0 +1,201 @@
+---
+- name: Require inventory connection settings
+  ansible.builtin.assert:
+    that:
+      - ansible_host is defined
+      - ansible_host != 'CHANGE_ME'
+      - mysql_user | default('') | length > 0
+      - mysql_password | default('') | length > 0
+      - mysql_password != 'CHANGE_ME'
+    fail_msg: >-
+      Edit inventory.ini before running: set ansible_host, mysql_user, and
+      mysql_password (mysql_password must not be CHANGE_ME).
+
+- name: Check python3
+  ansible.builtin.command:
+    argv: [python3, --version]
+  register: python3_ver
+  changed_when: false
+
+- name: Check mysql client
+  ansible.builtin.command:
+    argv: ["{{ mysql_bin }}", --version]
+  register: mysql_client_ver
+  changed_when: false
+
+- name: Write bootstrap MySQL client defaults
+  ansible.builtin.copy:
+    dest: /tmp/wc_bench_client.cnf
+    mode: "0600"
+    content: |
+      [client]
+      user={{ mysql_user }}
+      password={{ mysql_password }}
+      {% if mysql_socket | default('') | length %}
+      socket={{ mysql_socket }}
+      {% else %}
+      host={{ mysql_host }}
+      port={{ mysql_port }}
+      {% endif %}
+      default-character-set=utf8mb4
+
+- name: Query MySQL identity
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file=/tmp/wc_bench_client.cnf
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - >-
+        SELECT VERSION(),
+               @@innodb_file_per_table,
+               IFNULL(@@secure_file_priv, 'NULL'),
+               @@datadir,
+               @@innodb_buffer_pool_size
+  register: mysql_identity
+  changed_when: false
+
+- name: Parse MySQL identity
+  ansible.builtin.set_fact:
+    mysql_version_full: "{{ mysql_identity.stdout.split('\t')[0] }}"
+    mysql_innodb_file_per_table: "{{ mysql_identity.stdout.split('\t')[1] }}"
+    mysql_secure_file_priv_raw: "{{ mysql_identity.stdout.split('\t')[2] }}"
+    mysql_datadir: "{{ mysql_identity.stdout.split('\t')[3] }}"
+    mysql_innodb_buffer_pool_size: "{{ mysql_identity.stdout.split('\t')[4] | int }}"
+
+- name: Require MySQL 8.0+
+  ansible.builtin.assert:
+    that:
+      - mysql_version_full is version('8.0', '>=')
+    fail_msg: "MySQL 8.0+ is required (got {{ mysql_version_full }}). Step 8 uses utf8mb4_0900_as_ci."
+
+- name: Check utf8mb4_0900_as_ci collation
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file=/tmp/wc_bench_client.cnf
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb4_0900_as_ci'
+  register: collation_check
+  changed_when: false
+
+- name: Require utf8mb4_0900_as_ci
+  ansible.builtin.assert:
+    that:
+      - collation_check.stdout | trim | int > 0
+    fail_msg: >-
+      Collation utf8mb4_0900_as_ci is missing ({{ mysql_version_full }}).
+      MariaDB and MySQL 5.7 cannot run Step 8 as specified.
+
+- name: Require innodb_file_per_table
+  ansible.builtin.assert:
+    that:
+      - mysql_innodb_file_per_table | string in ['1', 'ON', 'on']
+    fail_msg: "innodb_file_per_table must be ON so table-size metrics and COPY DDL space checks are meaningful."
+
+- name: Fail if LOAD DATA INFILE is disabled
+  ansible.builtin.assert:
+    that:
+      - mysql_secure_file_priv_raw | upper != 'NULL'
+    fail_msg: >-
+      @@secure_file_priv is NULL, so LOAD DATA INFILE is disabled.
+      Set secure_file_priv to a directory (for example /var/lib/mysql-files).
+
+- name: Resolve work and LOAD DATA staging directories
+  ansible.builtin.set_fact:
+    resolved_work_dir: /var/tmp/wc_bench
+    resolved_staging_dir: "{{ _tsv_dir if (staging_dir | default('auto')) == 'auto' else staging_dir }}"
+  vars:
+    _sf: "{{ mysql_secure_file_priv_raw | trim | regex_replace('/$', '') }}"
+    _tsv_dir: "{{ _sf if _sf | length > 0 else '/var/tmp/wc_bench' }}"
+
+- name: Create work directory for scripts and results
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ resolved_work_dir }}"
+    - "{{ resolved_work_dir }}/scripts"
+
+- name: Create TSV staging directory when it is not secure_file_priv
+  ansible.builtin.file:
+    path: "{{ resolved_staging_dir }}"
+    state: directory
+    mode: "0775"
+  become: true
+  when: resolved_staging_dir != mysql_secure_file_priv_raw | trim | regex_replace('/$', '')
+
+- name: Install MySQL client defaults in work directory
+  ansible.builtin.copy:
+    src: /tmp/wc_bench_client.cnf
+    dest: "{{ resolved_work_dir }}/client.cnf"
+    mode: "0600"
+    remote_src: true
+
+- name: Set connection facts
+  ansible.builtin.set_fact:
+    mysql_defaults_file: "{{ resolved_work_dir }}/client.cnf"
+    remote_scripts_dir: "{{ resolved_work_dir }}/scripts"
+    remote_schema_path: "{{ resolved_work_dir }}/schema.sql"
+    mysql_exec: >-
+      {{ mysql_bin }} --defaults-extra-file={{ resolved_work_dir }}/client.cnf
+      --batch --raw --skip-column-names --default-character-set=utf8mb4
+
+- name: Verify TSV staging directory is writable
+  ansible.builtin.copy:
+    dest: "{{ resolved_staging_dir }}/wc_bench_write_test"
+    content: "ok\n"
+    mode: "0644"
+  become: true
+
+- name: Remove write test file
+  ansible.builtin.file:
+    path: "{{ resolved_staging_dir }}/wc_bench_write_test"
+    state: absent
+  become: true
+
+- name: Copy generator and timer scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/scripts/"
+    dest: "{{ remote_scripts_dir }}/"
+    mode: "0755"
+
+- name: Copy schema.sql
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/files/schema.sql"
+    dest: "{{ remote_schema_path }}"
+    mode: "0644"
+
+- name: Show grants for FILE privilege check
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SHOW GRANTS FOR CURRENT_USER()
+  register: mysql_grants
+  changed_when: false
+
+- name: Require FILE or ALL PRIVILEGES
+  ansible.builtin.assert:
+    that:
+      - mysql_grants.stdout is search('FILE') or mysql_grants.stdout is search('ALL PRIVILEGES')
+    fail_msg: >-
+      MySQL user {{ mysql_user }} needs FILE (or ALL PRIVILEGES) for LOAD DATA INFILE.
+      Grants: {{ mysql_grants.stdout }}
+
+- name: Warn about large scales
+  ansible.builtin.debug:
+    msg: >-
+      Scales {{ row_counts }} requested. 100M is typically hundreds of GiB and hours;
+      1B is typically multi-TiB and can take days. COPY ALTER needs ~2.5x table size free
+      on {{ mysql_datadir }}.
