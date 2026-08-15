@@ -15,62 +15,6 @@ STATUS_VARS = (
     "Handler_write",
 )
 
-# region agent log
-_DEBUG_SESSION = "e9da19"
-_DEBUG_LOG_DEFAULT = "/var/tmp/wc_bench/debug-e9da19.log"
-_DEBUG_LOG_LOCAL = (
-    "/Users/otto/Cursor_Repos/iw-wm-db-upgrade-test/.cursor/debug-e9da19.log"
-)
-_DEBUG_INGEST = (
-    "http://127.0.0.1:7582/ingest/979dfc66-66e3-4890-9e31-c2af32ce3e11"
-)
-
-
-def _agent_log(hypothesis_id, location, message, data):
-    payload = {
-        "sessionId": _DEBUG_SESSION,
-        "runId": os.environ.get("WC_BENCH_DEBUG_RUN", "alter"),
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(payload, default=str)
-    paths = []
-    env_path = os.environ.get("WC_BENCH_DEBUG_LOG")
-    if env_path:
-        paths.append(env_path)
-    paths.extend((_DEBUG_LOG_DEFAULT, _DEBUG_LOG_LOCAL))
-    seen = set()
-    for path in paths:
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        try:
-            parent = os.path.dirname(path)
-            if parent and not os.path.isdir(parent):
-                continue
-            with open(path, "a") as fh:
-                fh.write(line + "\n")
-        except Exception:
-            pass
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(
-            _DEBUG_INGEST,
-            data=line.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Debug-Session-Id": _DEBUG_SESSION,
-            },
-        )
-        urllib.request.urlopen(req, timeout=1).read()
-    except Exception:
-        pass
-# endregion
-
 
 class MysqlError(Exception):
     def __init__(self, message, returncode=1):
@@ -222,31 +166,6 @@ def sum_size(tables, field):
     return total
 
 
-def _datadir_free(args):
-    try:
-        datadir = run_mysql(args, "SELECT @@datadir").strip()
-        st = os.statvfs(datadir)
-        return {
-            "datadir": datadir,
-            "free_bytes": int(st.f_bavail) * int(st.f_frsize),
-        }
-    except Exception as exc:
-        return {"error": str(exc)[:200]}
-
-
-def _session_diag(args):
-    try:
-        raw = run_mysql(
-            args,
-            "SELECT @@wait_timeout, @@net_read_timeout, @@net_write_timeout, "
-            "@@old_alter_table, @@innodb_buffer_pool_size, @@open_files_limit",
-            database=args.database,
-        ).strip()
-        return raw
-    except Exception as exc:
-        return str(exc)[:200]
-
-
 def append_json_list(path, obj):
     data = []
     if path and os.path.exists(path):
@@ -283,25 +202,6 @@ def timed_execute(args):
 
     before_tables = snapshot_tables(args)
     before_status = snapshot_status(args)
-    # region agent log
-    _agent_log(
-        "D",
-        "timed_sql.py:timed_execute",
-        "alter statement starting",
-        {
-            "database": args.database,
-            "step": args.step,
-            "name": args.name,
-            "sql": sql[:300],
-            "data_length": sum_size(before_tables, "data_length"),
-            "index_length": sum_size(before_tables, "index_length"),
-            "table_rows": {k: v.get("table_rows") for k, v in before_tables.items()},
-            "disk": _datadir_free(args),
-            "session_diag": _session_diag(args),
-            "prelude_old_alter_table": 0,
-        },
-    )
-    # endregion
 
     wrapper = (
         "%s\n"
@@ -340,25 +240,6 @@ def timed_execute(args):
             mysql_end = parts[1]
         elif parts and parts[0] not in ("BENCH_START", "BENCH_END"):
             extra_stdout.append(line)
-
-    # region agent log
-    _agent_log(
-        "A",
-        "timed_sql.py:timed_execute",
-        "mysql subprocess finished",
-        {
-            "database": args.database,
-            "step": args.step,
-            "name": args.name,
-            "rc": proc.returncode,
-            "wall_seconds": round(wall_seconds, 3),
-            "stderr_prefix": ((proc.stderr or "")[:400]),
-            "stdout_len": len(proc.stdout or ""),
-            "mysql_start": mysql_start,
-            "mysql_end": mysql_end,
-        },
-    )
-    # endregion
 
     elapsed_seconds = wall_seconds
     if status != "failed" and mysql_start and mysql_end:
@@ -406,24 +287,6 @@ def timed_execute(args):
         "mysql_stderr": (proc.stderr or "").strip() or None,
         "result_rows": extra_stdout[:20],
     }
-    # region agent log
-    _agent_log(
-        "E",
-        "timed_sql.py:timed_execute",
-        "alter statement result",
-        {
-            "database": args.database,
-            "step": args.step,
-            "name": args.name,
-            "status": status,
-            "elapsed_seconds": round(elapsed_seconds, 3),
-            "mysql_start": mysql_start,
-            "mysql_end": mysql_end,
-            "error": (error or "")[:400],
-            "data_delta_bytes": result["data_delta_bytes"],
-        },
-    )
-    # endregion
     return result
 
 
@@ -438,11 +301,6 @@ def main():
     parser.add_argument("--step", default=None)
     parser.add_argument("--name", default="")
     parser.add_argument("--session-timeout", type=int, default=259200)
-    parser.add_argument(
-        "--debug-log",
-        default="",
-        help="NDJSON debug log path for ALTER phase",
-    )
     parser.add_argument(
         "--snapshot-only",
         action="store_true",
@@ -464,8 +322,6 @@ def main():
         help="Append a skipped result without executing SQL",
     )
     args = parser.parse_args()
-    if args.debug_log:
-        os.environ["WC_BENCH_DEBUG_LOG"] = args.debug_log
 
     try:
         step = int(args.step) if args.step not in (None, "") else None
@@ -507,24 +363,7 @@ def main():
         if not args.sql:
             print("timed_sql.py: --sql is required", file=sys.stderr)
             return 2
-        try:
-            result = timed_execute(args)
-        except Exception as exc:
-            # region agent log
-            _agent_log(
-                "E",
-                "timed_sql.py:main",
-                "timed_execute raised",
-                {
-                    "database": args.database,
-                    "step": args.step,
-                    "name": args.name,
-                    "error": str(exc)[:400],
-                    "exc_type": type(exc).__name__,
-                },
-            )
-            # endregion
-            raise
+        result = timed_execute(args)
 
     if args.results_file:
         append_json_list(args.results_file, result)
