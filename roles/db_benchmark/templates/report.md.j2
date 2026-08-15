@@ -14,6 +14,7 @@
 {%- endmacro %}
 {% macro scale_label(rows) -%}
 {%- if rows | int == 1000000 -%}1M
+{%- elif rows | int == 5000000 -%}5M
 {%- elif rows | int == 10000000 -%}10M
 {%- elif rows | int == 100000000 -%}100M
 {%- elif rows | int == 500000000 -%}500M

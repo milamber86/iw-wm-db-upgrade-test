@@ -11,6 +11,13 @@
   block:
     - ansible.builtin.include_tasks: run_tier.yml
   rescue:
+    - name: Fetch ALTER debug log after tier failure
+      ansible.builtin.fetch:
+        src: "{{ resolved_work_dir }}/debug-e9da19.log"
+        dest: "{{ playbook_dir }}/.cursor/debug-e9da19.log"
+        flat: true
+      failed_when: false
+
     - name: Load partial statements log after failure
       ansible.builtin.slurp:
         src: "{{ remote_statements_file }}"
