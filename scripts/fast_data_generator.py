@@ -16,17 +16,6 @@ import time
 import subprocess
 from multiprocessing import Pool
 
-# region agent log
-_DEBUG_SESSION = "e9da19"
-_DEBUG_LOG_DEFAULT = "/var/tmp/wc_bench/debug-e9da19.log"
-_DEBUG_LOG_LOCAL = (
-    "/Users/otto/Cursor_Repos/iw-wm-db-upgrade-test/.cursor/debug-e9da19.log"
-)
-_DEBUG_INGEST = (
-    "http://127.0.0.1:7582/ingest/979dfc66-66e3-4890-9e31-c2af32ce3e11"
-)
-# endregion
-
 _TRANSIENT_MYSQL = (
     "ERROR 2013",
     "ERROR 2006",
@@ -180,45 +169,6 @@ def _index_name_from_def(defn):
     return parts[1] if len(parts) > 1 else defn
 
 
-# region agent log
-def _agent_log(hypothesis_id, location, message, data):
-    payload = {
-        "sessionId": _DEBUG_SESSION,
-        "runId": os.environ.get("WC_BENCH_DEBUG_RUN", "post-fix"),
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(payload, default=str)
-    log_path = os.environ.get("WC_BENCH_DEBUG_LOG") or _DEBUG_LOG_DEFAULT
-    for path in (log_path, _DEBUG_LOG_LOCAL):
-        try:
-            parent = os.path.dirname(path)
-            if parent and not os.path.isdir(parent):
-                continue
-            with open(path, "a") as fh:
-                fh.write(line + "\n")
-        except Exception:
-            pass
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(
-            _DEBUG_INGEST,
-            data=line.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Debug-Session-Id": _DEBUG_SESSION,
-            },
-        )
-        urllib.request.urlopen(req, timeout=1).read()
-    except Exception:
-        pass
-# endregion
-
-
 def eprint(*a):
     sys.stderr.write(" ".join(str(x) for x in a) + "\n")
     sys.stderr.flush()
@@ -282,7 +232,6 @@ def sql_quote_path(path):
 def run_mysql(cfg, sql, database=None, retries=None):
     if retries is None:
         retries = int(cfg.get("mysql_retries", 5))
-    timeout = int(cfg.get("session_timeout", 259200))
     cmd = [
         cfg["mysql_bin"],
         "--defaults-extra-file=" + cfg["defaults_extra_file"],
@@ -298,47 +247,17 @@ def run_mysql(cfg, sql, database=None, retries=None):
     last_err = None
     attempts = max(1, retries)
     for attempt in range(1, attempts + 1):
-        t0 = time.time()
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
         )
-        duration = time.time() - t0
         err = (proc.stderr or proc.stdout or "").strip()
-        # region agent log
-        _agent_log(
-            "A",
-            "fast_data_generator.py:run_mysql",
-            "mysql invocation finished",
-            {
-                "attempt": attempt,
-                "attempts": attempts,
-                "rc": proc.returncode,
-                "duration_s": round(duration, 3),
-                "sql_prefix": (sql or "")[:180],
-                "stderr_prefix": (err or "")[:300],
-                "cli_timeout_s": timeout,
-            },
-        )
-        # endregion
         if proc.returncode == 0:
             return proc.stdout
         last_err = MysqlError(err or "mysql exited %d" % proc.returncode)
         transient = _transient_mysql(last_err)
-        # region agent log
-        _agent_log(
-            "B",
-            "fast_data_generator.py:run_mysql",
-            "mysql invocation failed",
-            {
-                "attempt": attempt,
-                "transient": transient,
-                "error": str(last_err)[:400],
-            },
-        )
-        # endregion
         if (not transient) or attempt >= attempts:
             raise last_err
         backoff = min(60, 2 ** (attempt - 1))
@@ -348,20 +267,6 @@ def run_mysql(cfg, sql, database=None, retries=None):
         )
         time.sleep(backoff)
     raise last_err
-
-
-def table_auto_increment(cfg, table):
-    db = cfg["database"].replace("'", "''")
-    tbl = table.replace("'", "''")
-    raw = run_mysql(
-        cfg,
-        "SELECT AUTO_INCREMENT FROM information_schema.TABLES "
-        "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'" % (db, tbl),
-    ).strip()
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 def load_data(cfg, table, path, columns):
@@ -427,19 +332,6 @@ def add_indexes(cfg, table, defs):
     for attempt in range(1, retries + 1):
         existing = set(list_secondary_indexes(cfg, table))
         still = [d for d in defs if _index_name_from_def(d) not in existing]
-        # region agent log
-        _agent_log(
-            "E",
-            "fast_data_generator.py:add_indexes",
-            "index rebuild attempt",
-            {
-                "table": table,
-                "attempt": attempt,
-                "existing": sorted(existing),
-                "pending": [_index_name_from_def(d) for d in still],
-            },
-        )
-        # endregion
         if not still:
             eprint("[seed] %s secondary indexes already present" % table)
             return
@@ -459,20 +351,6 @@ def add_indexes(cfg, table, defs):
             text = str(exc)
             transient = _transient_mysql(exc)
             duplicate = "Duplicate key name" in text or "ERROR 1061" in text
-            # region agent log
-            _agent_log(
-                "C",
-                "fast_data_generator.py:add_indexes",
-                "index rebuild failed",
-                {
-                    "table": table,
-                    "attempt": attempt,
-                    "transient": transient,
-                    "duplicate": duplicate,
-                    "error": text[:400],
-                },
-            )
-            # endregion
             if duplicate:
                 eprint("[seed] %s index add hit duplicate keys; re-checking" % table)
                 continue
@@ -705,11 +583,6 @@ def main():
     parser.add_argument("--apply-source-fks", action="store_true")
     parser.add_argument("--session-timeout", type=int, default=259200)
     parser.add_argument("--mysql-retries", type=int, default=8)
-    parser.add_argument(
-        "--debug-log",
-        default="",
-        help="NDJSON debug log path (default /var/tmp/wc_bench/debug-e9da19.log)",
-    )
     args = parser.parse_args()
 
     if args.rows < 1:
@@ -728,8 +601,6 @@ def main():
         return 2
 
     os.makedirs(args.staging_dir, exist_ok=True)
-    if args.debug_log:
-        os.environ["WC_BENCH_DEBUG_LOG"] = args.debug_log
 
     cfg = {
         "mysql_bin": args.mysql_bin,
@@ -769,68 +640,13 @@ def main():
         "[seed] loading into existing schema (indexes kept; "
         "FOREIGN_KEY_CHECKS=0 UNIQUE_CHECKS=0 during LOAD DATA)"
     )
-    db_esc = args.database.replace("'", "''")
-    schema_fks = run_mysql(
-        cfg,
-        "SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS "
-        "WHERE TABLE_SCHEMA='%s' AND CONSTRAINT_TYPE='FOREIGN KEY' "
-        "ORDER BY TABLE_NAME, CONSTRAINT_NAME" % db_esc,
-    ).strip()
-    schema_indexes = run_mysql(
-        cfg,
-        "SELECT DISTINCT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS "
-        "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME IN ('item','folder','snoozed_item') "
-        "ORDER BY TABLE_NAME, INDEX_NAME" % db_esc,
-    ).strip()
-    # region agent log
-    _agent_log(
-        "B",
-        "fast_data_generator.py:main",
-        "pre-load schema FKs and indexes",
-        {
-            "database": args.database,
-            "rows": args.rows,
-            "foreign_keys": schema_fks,
-            "indexes": schema_indexes,
-        },
-    )
-    _agent_log(
-        "C",
-        "fast_data_generator.py:main",
-        "load into indexed schema; skip post-load ALTER INDEX/FK",
-        {
-            "database": args.database,
-            "rows": args.rows,
-            "apply_source_fks": bool(args.apply_source_fks),
-            "fk_count": len([ln for ln in schema_fks.splitlines() if ln.strip()]),
-            "index_count": len([ln for ln in schema_indexes.splitlines() if ln.strip()]),
-        },
-    )
-    # endregion
 
     t_load = time.time()
     folder_path = os.path.join(args.staging_dir, "wc_bench_folders.tsv")
     write_folder_tsv(folder_path, num_accounts, args.folders_per_account)
     load_data(cfg, "folder", folder_path, FOLDER_COLUMNS)
     os.remove(folder_path)
-    folder_ai = table_auto_increment(cfg, "folder")
-    eprint(
-        "[seed] loaded %d folders (AUTO_INCREMENT=%s; skip ALTER AUTO_INCREMENT)"
-        % (num_folders, folder_ai)
-    )
-    # region agent log
-    _agent_log(
-        "G",
-        "fast_data_generator.py:main",
-        "skip folder AUTO_INCREMENT ALTER after LOAD DATA",
-        {
-            "table": "folder",
-            "auto_increment": folder_ai,
-            "target": num_folders + 1,
-            "skipped_alter": True,
-        },
-    )
-    # endregion
+    eprint("[seed] loaded %d folders" % num_folders)
 
     ranges = split_ranges(1, args.rows + 1, args.workers)
     if args.workers <= 1 or len(ranges) == 1:
@@ -844,26 +660,7 @@ def main():
             pool.close()
             pool.join()
 
-    item_ai = table_auto_increment(cfg, "item")
-    old_alter = run_mysql(cfg, "SELECT @@SESSION.old_alter_table, @@GLOBAL.old_alter_table").strip()
-    eprint(
-        "[seed] loaded %d items (AUTO_INCREMENT=%s; skip ALTER AUTO_INCREMENT)"
-        % (loaded_items, item_ai)
-    )
-    # region agent log
-    _agent_log(
-        "G",
-        "fast_data_generator.py:main",
-        "skip item AUTO_INCREMENT ALTER after LOAD DATA",
-        {
-            "table": "item",
-            "auto_increment": item_ai,
-            "target": args.rows + 1,
-            "old_alter_table": old_alter,
-            "skipped_alter": True,
-        },
-    )
-    # endregion
+    eprint("[seed] loaded %d items" % loaded_items)
 
     snoozed_path = os.path.join(args.staging_dir, "wc_bench_snoozed.tsv")
     snoozed_count = write_snoozed_tsv(
@@ -883,21 +680,6 @@ def main():
 
     index_build_seconds = 0.0
     eprint("[seed] skipping post-load index rebuild and FK ALTER (schema already has them)")
-    # region agent log
-    _agent_log(
-        "D",
-        "fast_data_generator.py:main",
-        "load complete; no post-load ALTER",
-        {
-            "database": args.database,
-            "item_count": loaded_items,
-            "load_seconds": round(load_seconds, 3),
-            "index_build_seconds": 0,
-            "fk_seconds": 0,
-            "seed_mode": "load_into_indexed_schema",
-        },
-    )
-    # endregion
 
     fk_seconds = 0.0
     if args.apply_source_fks:
