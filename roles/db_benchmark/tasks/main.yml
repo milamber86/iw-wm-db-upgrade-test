@@ -40,6 +40,14 @@
 - name: Collect environment specs
   ansible.builtin.import_tasks: collect_env.yml
 
+- name: Set timestamped report filenames
+  ansible.builtin.set_fact:
+    report_stamp: "{{ _stamp }}"
+    report_md_name: "migration_benchmark_report_{{ _stamp }}.md"
+    report_json_name: "benchmark_run_{{ _stamp }}.json"
+  vars:
+    _stamp: "{{ ansible_date_time.date | replace('-', '') }}T{{ ansible_date_time.time | replace(':', '') }}"
+
 - name: Run benchmark tiers
   ansible.builtin.include_tasks: run_tier_wrap.yml
   loop: "{{ row_counts }}"

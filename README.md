@@ -1,6 +1,6 @@
 # IceWarp webclient DB migration benchmark
 
-Ansible project that SSHs onto an existing **MySQL 8** server, creates isolated test databases, bulk-loads realistic `item` rows, times every statement in the IceWarp webclient INT→BIGINT / folder-redesign migration, and writes `reports/migration_benchmark_report.md`.
+Ansible project that SSHs onto an existing **MySQL 8** server, creates isolated test databases, bulk-loads realistic `item` rows, times every statement in the IceWarp webclient INT→BIGINT / folder-redesign migration, and writes timestamped files under `reports/`.
 
 It never touches any already existing database. Each scale uses a disposable database:
 
@@ -109,9 +109,9 @@ ansible-playbook site.yml -e row_count_preset=1m -e enable_load_tuning=true
 
 Output:
 
-- `reports/migration_benchmark_report.md` — environment, per-step timings, comparison matrix, bottlenecks, recommendations
-- `reports/benchmark_run.json` — full machine-readable results
-- `reports/results_<database>_statements.json` — crash-safe per-statement log
+- `reports/migration_benchmark_report_YYYYMMDDThhmmss.md` — environment, per-step timings, comparison matrix, bottlenecks, recommendations
+- `reports/benchmark_run_YYYYMMDDThhmmss.json` — full machine-readable results
+- `reports/results_<database>_statements_YYYYMMDDThhmmss.json` — crash-safe per-statement log
 
 ## Migration SQL gap
 

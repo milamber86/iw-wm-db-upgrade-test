@@ -2,23 +2,23 @@
 - name: Render markdown report on the database host
   ansible.builtin.template:
     src: report.md.j2
-    dest: "{{ resolved_work_dir }}/migration_benchmark_report.md"
+    dest: "{{ resolved_work_dir }}/{{ report_md_name }}"
     mode: "0644"
 
 - name: Write machine-readable results on the database host
   ansible.builtin.copy:
     content: "{{ benchmark_run | to_nice_json }}\n"
-    dest: "{{ resolved_work_dir }}/benchmark_run.json"
+    dest: "{{ resolved_work_dir }}/{{ report_json_name }}"
     mode: "0644"
 
 - name: Fetch markdown report to control node
   ansible.builtin.fetch:
-    src: "{{ resolved_work_dir }}/migration_benchmark_report.md"
-    dest: "{{ playbook_dir }}/reports/migration_benchmark_report.md"
+    src: "{{ resolved_work_dir }}/{{ report_md_name }}"
+    dest: "{{ playbook_dir }}/reports/{{ report_md_name }}"
     flat: true
 
 - name: Fetch JSON results to control node
   ansible.builtin.fetch:
-    src: "{{ resolved_work_dir }}/benchmark_run.json"
-    dest: "{{ playbook_dir }}/reports/benchmark_run.json"
+    src: "{{ resolved_work_dir }}/{{ report_json_name }}"
+    dest: "{{ playbook_dir }}/reports/{{ report_json_name }}"
     flat: true
