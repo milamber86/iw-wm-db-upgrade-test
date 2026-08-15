@@ -272,7 +272,8 @@ def timed_execute(args):
         "SET SESSION wait_timeout = %d; "
         "SET SESSION interactive_timeout = %d; "
         "SET SESSION net_read_timeout = %d; "
-        "SET SESSION net_write_timeout = %d;"
+        "SET SESSION net_write_timeout = %d; "
+        "SET SESSION old_alter_table = 0;"
         % (timeout, timeout, timeout, timeout)
     )
     try:
@@ -297,6 +298,7 @@ def timed_execute(args):
             "table_rows": {k: v.get("table_rows") for k, v in before_tables.items()},
             "disk": _datadir_free(args),
             "session_diag": _session_diag(args),
+            "prelude_old_alter_table": 0,
         },
     )
     # endregion

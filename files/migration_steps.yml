@@ -1,9 +1,10 @@
 ---
 # One timed statement per entry. optional=true skips when the constraint is absent.
+# DROP FOREIGN KEY must use ALGORITHM=INPLACE: old_alter_table=ON otherwise COPYs item.
 migration_steps:
   - step: 1
     name: drop_fk_item_folder
-    sql: ALTER TABLE item DROP FOREIGN KEY FK_item_folder
+    sql: ALTER TABLE item DROP FOREIGN KEY FK_item_folder, ALGORITHM=INPLACE, LOCK=NONE
     optional: true
     constraint_schema_table: item
     constraint_name: FK_item_folder
@@ -12,7 +13,7 @@ migration_steps:
 
   - step: 1
     name: drop_fk_snoozed_item
-    sql: ALTER TABLE snoozed_item DROP FOREIGN KEY _snoozed_item_ibfk_1
+    sql: ALTER TABLE snoozed_item DROP FOREIGN KEY _snoozed_item_ibfk_1, ALGORITHM=INPLACE, LOCK=NONE
     optional: true
     constraint_schema_table: snoozed_item
     constraint_name: _snoozed_item_ibfk_1

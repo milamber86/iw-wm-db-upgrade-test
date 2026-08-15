@@ -13,7 +13,8 @@
           'innodb_buffer_pool_size','innodb_ddl_threads','innodb_parallel_read_threads',
           'innodb_autoinc_lock_mode','innodb_flush_log_at_trx_commit','sync_binlog',
           'datadir','version','version_comment','secure_file_priv','innodb_file_per_table',
-          'innodb_page_size','max_allowed_packet','version_compile_os','version_compile_machine'
+          'innodb_page_size','max_allowed_packet','version_compile_os','version_compile_machine',
+          'old_alter_table'
         )
   register: mysql_vars_raw
   changed_when: false
