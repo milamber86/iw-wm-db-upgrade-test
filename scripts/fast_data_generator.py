@@ -350,6 +350,20 @@ def run_mysql(cfg, sql, database=None, retries=None):
     raise last_err
 
 
+def table_auto_increment(cfg, table):
+    db = cfg["database"].replace("'", "''")
+    tbl = table.replace("'", "''")
+    raw = run_mysql(
+        cfg,
+        "SELECT AUTO_INCREMENT FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'" % (db, tbl),
+    ).strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_data(cfg, table, path, columns):
     os.chmod(path, 0o644)
     col_sql = ", ".join("`%s`" % c for c in columns)
@@ -799,12 +813,24 @@ def main():
     write_folder_tsv(folder_path, num_accounts, args.folders_per_account)
     load_data(cfg, "folder", folder_path, FOLDER_COLUMNS)
     os.remove(folder_path)
-    run_mysql(
-        cfg,
-        "ALTER TABLE folder AUTO_INCREMENT=%d" % (num_folders + 1),
-        database=args.database,
+    folder_ai = table_auto_increment(cfg, "folder")
+    eprint(
+        "[seed] loaded %d folders (AUTO_INCREMENT=%s; skip ALTER AUTO_INCREMENT)"
+        % (num_folders, folder_ai)
     )
-    eprint("[seed] loaded %d folders" % num_folders)
+    # region agent log
+    _agent_log(
+        "G",
+        "fast_data_generator.py:main",
+        "skip folder AUTO_INCREMENT ALTER after LOAD DATA",
+        {
+            "table": "folder",
+            "auto_increment": folder_ai,
+            "target": num_folders + 1,
+            "skipped_alter": True,
+        },
+    )
+    # endregion
 
     ranges = split_ranges(1, args.rows + 1, args.workers)
     if args.workers <= 1 or len(ranges) == 1:
@@ -818,12 +844,26 @@ def main():
             pool.close()
             pool.join()
 
-    run_mysql(
-        cfg,
-        "ALTER TABLE item AUTO_INCREMENT=%d" % (args.rows + 1),
-        database=args.database,
+    item_ai = table_auto_increment(cfg, "item")
+    old_alter = run_mysql(cfg, "SELECT @@SESSION.old_alter_table, @@GLOBAL.old_alter_table").strip()
+    eprint(
+        "[seed] loaded %d items (AUTO_INCREMENT=%s; skip ALTER AUTO_INCREMENT)"
+        % (loaded_items, item_ai)
     )
-    eprint("[seed] loaded %d items" % loaded_items)
+    # region agent log
+    _agent_log(
+        "G",
+        "fast_data_generator.py:main",
+        "skip item AUTO_INCREMENT ALTER after LOAD DATA",
+        {
+            "table": "item",
+            "auto_increment": item_ai,
+            "target": args.rows + 1,
+            "old_alter_table": old_alter,
+            "skipped_alter": True,
+        },
+    )
+    # endregion
 
     snoozed_path = os.path.join(args.staging_dir, "wc_bench_snoozed.tsv")
     snoozed_count = write_snoozed_tsv(
