@@ -9,6 +9,9 @@ It never touches any already existing database. Each scale uses a disposable dat
 | 1,000,000 | `test_wc_1m` |
 | 5,000,000 | `test_wc_5m` |
 | 10,000,000 | `test_wc_10m` |
+| 15,000,000 | `test_wc_15m` |
+| 20,000,000 | `test_wc_20m` |
+| 30,000,000 | `test_wc_30m` |
 | 100,000,000 | `test_wc_100m` |
 | 500,000,000 | `test_wc_500m` |
 | 1,000,000,000 | `test_wc_1b` |
@@ -38,6 +41,9 @@ InnoDB `COPY` DDL duplicates the table. Budget **~2.5×** the loaded size as fre
 | 1M | ~2 GiB | ~5 GiB | minutes |
 | 5M | ~10 GiB | ~25 GiB | tens of minutes |
 | 10M | ~20 GiB | ~50 GiB | tens of minutes |
+| 15M | ~30 GiB | ~75 GiB | tens of minutes |
+| 20M | ~40 GiB | ~100 GiB | ~1 hour |
+| 30M | ~60 GiB | ~150 GiB | ~1–2 hours |
 | 100M | ~200 GiB | ~500 GiB | hours |
 | 500M | ~1 TiB | ~2.5 TiB | many hours |
 | 1B | ~2 TiB | ~4–5 TiB | many hours to days |
@@ -65,6 +71,15 @@ ansible-playbook site.yml -e row_count_preset=5m
 
 # 10M
 ansible-playbook site.yml -e row_count_preset=10m
+
+# 15M
+ansible-playbook site.yml -e row_count_preset=15m
+
+# 20M
+ansible-playbook site.yml -e row_count_preset=20m
+
+# 30M
+ansible-playbook site.yml -e row_count_preset=30m
 
 # 100M
 ansible-playbook site.yml -e row_count_preset=100m

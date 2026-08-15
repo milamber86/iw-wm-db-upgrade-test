@@ -9,6 +9,9 @@ scale_db_names:
   "1000000": test_wc_1m
   "5000000": test_wc_5m
   "10000000": test_wc_10m
+  "15000000": test_wc_15m
+  "20000000": test_wc_20m
+  "30000000": test_wc_30m
   "100000000": test_wc_100m
   "500000000": test_wc_500m
   "1000000000": test_wc_1b

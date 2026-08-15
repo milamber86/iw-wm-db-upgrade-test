@@ -14,7 +14,7 @@
           'innodb_autoinc_lock_mode','innodb_flush_log_at_trx_commit','sync_binlog',
           'datadir','version','version_comment','secure_file_priv','innodb_file_per_table',
           'innodb_page_size','max_allowed_packet','version_compile_os','version_compile_machine',
-          'old_alter_table'
+          'old_alter_table','log_bin','skip_log_bin','innodb_doublewrite'
         )
   register: mysql_vars_raw
   changed_when: false
@@ -30,6 +30,28 @@
         {%- endif -%}
       {%- endfor -%}
       {{ ns.d }}
+
+- name: Derive skip-log-bin from log_bin when skip_log_bin is not a variable
+  ansible.builtin.set_fact:
+    mysql_log_bin: "{{ mysql_vars['log_bin'] | default('n/a') }}"
+    mysql_innodb_doublewrite: "{{ mysql_vars['innodb_doublewrite'] | default('n/a') }}"
+    mysql_skip_log_bin: >-
+      {%- if mysql_vars['skip_log_bin'] is defined -%}
+      {{ mysql_vars['skip_log_bin'] }}
+      {%- elif (mysql_vars['log_bin'] | default('') | string | lower) in ['off', '0'] -%}
+      ON
+      {%- elif (mysql_vars['log_bin'] | default('') | string | lower) in ['on', '1'] -%}
+      OFF
+      {%- else -%}
+      n/a
+      {%- endif -%}
+
+- name: Report skip-log-bin and innodb_doublewrite
+  ansible.builtin.debug:
+    msg: >-
+      skip-log-bin={{ mysql_skip_log_bin | trim }}
+      (log_bin={{ mysql_log_bin }});
+      innodb_doublewrite={{ mysql_innodb_doublewrite }}
 
 - name: Measure datadir free space
   ansible.builtin.command:
@@ -61,6 +83,9 @@
       innodb_ddl_threads: "{{ mysql_vars['innodb_ddl_threads'] | default('n/a') }}"
       innodb_parallel_read_threads: "{{ mysql_vars['innodb_parallel_read_threads'] | default('n/a') }}"
       innodb_autoinc_lock_mode: "{{ mysql_vars['innodb_autoinc_lock_mode'] | default('n/a') }}"
+      log_bin: "{{ mysql_log_bin }}"
+      skip_log_bin: "{{ mysql_skip_log_bin | trim }}"
+      innodb_doublewrite: "{{ mysql_innodb_doublewrite }}"
       datadir: "{{ mysql_datadir }}"
       datadir_avail_bytes: "{{ datadir_df_avail_bytes | int }}"
       datadir_total_bytes: "{{ datadir_df_total_bytes | int }}"
