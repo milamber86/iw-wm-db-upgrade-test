@@ -24,34 +24,20 @@
   changed_when: false
   failed_when: false
 
+- name: Show wait probe results
+  ansible.builtin.debug:
+    msg: >-
+      adm_rc={{ wait_adm.rc | default(-1) }}
+      adm_out={{ wait_adm.stdout | default('') | trim }}
+      adm_err={{ wait_adm.stderr | default('') | trim }}
+      sql_rc={{ wait_sql.rc | default(-1) }}
+      sql_out={{ wait_sql.stdout | default('') | trim }}
+      sql_err={{ wait_sql.stderr | default('') | trim }}
+
 - name: Write wait-probe debug log
-  ansible.builtin.shell: |
-    python3 -c "
-    import json, time, os
-    p = {
-      'sessionId': 'e9da19',
-      'runId': 'wait-mysqld',
-      'hypothesisId': 'A',
-      'location': 'wait_mysqld.yml',
-      'message': 'mysqladmin ping vs mysql SELECT 1',
-      'timestamp': int(time.time() * 1000),
-      'data': {
-        'mysqladmin_bin': '''{{ mysqladmin_bin }}''',
-        'mysql_bin': '''{{ mysql_bin }}''',
-        'defaults_file': '''{{ mysql_defaults_file }}''',
-        'adm_rc': {{ wait_adm.rc | default(-1) | int }},
-        'adm_out': '''{{ (wait_adm.stdout | default('') ~ ' ' ~ wait_adm.stderr | default(''))[:400] | regex_replace(\"'\", ' ') }}''',
-        'sql_rc': {{ wait_sql.rc | default(-1) | int }},
-        'sql_out': '''{{ (wait_sql.stdout | default('') ~ ' ' ~ wait_sql.stderr | default(''))[:400] | regex_replace(\"'\", ' ') }}''',
-      },
-    }
-    path = '/var/tmp/wc_bench/debug-e9da19.log'
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'a') as fh:
-      fh.write(json.dumps(p) + '\n')
-    "
-  args:
-    executable: /bin/bash
+  ansible.builtin.copy:
+    dest: /var/tmp/wc_bench/debug-e9da19.log
+    content: "{{ {'sessionId': 'e9da19', 'runId': 'wait-mysqld', 'hypothesisId': 'A', 'location': 'wait_mysqld.yml', 'message': 'mysqladmin ping vs mysql SELECT 1', 'timestamp': (ansible_date_time.epoch | int) * 1000, 'data': {'mysqladmin_bin': mysqladmin_bin, 'mysql_bin': mysql_bin, 'defaults_file': mysql_defaults_file, 'adm_rc': wait_adm.rc | default(-1), 'adm_stdout': wait_adm.stdout | default(''), 'adm_stderr': wait_adm.stderr | default(''), 'sql_rc': wait_sql.rc | default(-1), 'sql_stdout': wait_sql.stdout | default(''), 'sql_stderr': wait_sql.stderr | default('')}} | to_json }}\n"
   changed_when: false
   failed_when: false
 
