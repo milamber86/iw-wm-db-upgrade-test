@@ -34,6 +34,7 @@ load_tuning_sync_binlog: 0
 # Disable on primaries with async replicas: -e enable_fast_seed=false
 enable_fast_seed: true
 mysql_service_name: mysql
+mysql_cnf_path: /etc/my.cnf
 mysql_conf_dropin_dir: /etc/my.cnf.d
 mysqladmin_bin: mysqladmin
 

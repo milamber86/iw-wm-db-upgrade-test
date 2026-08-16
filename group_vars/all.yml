@@ -41,6 +41,7 @@ load_tuning_sync_binlog: 0
 #   ansible-playbook site.yml -e enable_fast_seed=false
 enable_fast_seed: true
 mysql_service_name: mysql
+mysql_cnf_path: /etc/my.cnf
 # RHEL/Percona: /etc/my.cnf.d   Debian/Ubuntu: /etc/mysql/mysql.conf.d
 mysql_conf_dropin_dir: /etc/my.cnf.d
 mysqladmin_bin: mysqladmin
