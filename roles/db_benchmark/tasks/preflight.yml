@@ -195,6 +195,51 @@
       MySQL user {{ mysql_user }} needs FILE (or ALL PRIVILEGES) for LOAD DATA INFILE.
       Grants: {{ mysql_grants.stdout }}
 
+- name: Probe SHOW REPLICA STATUS
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SHOW REPLICA STATUS
+  register: replica_status
+  changed_when: false
+  failed_when: false
+  when: enable_fast_seed | bool
+
+- name: Probe SHOW SLAVE STATUS
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SHOW SLAVE STATUS
+  register: slave_status
+  changed_when: false
+  failed_when: false
+  when: enable_fast_seed | bool
+
+- name: Warn when fast-seed would break async replicas
+  ansible.builtin.debug:
+    msg: >-
+      This instance appears to have a replica (SHOW REPLICA/SLAVE STATUS is non-empty).
+      enable_fast_seed=true turns on skip-log-bin during LOAD DATA, so those writes are
+      not replicated. Re-run with -e enable_fast_seed=false on replica/cluster hosts.
+  when:
+    - enable_fast_seed | bool
+    - >-
+      (replica_status.rc | default(1) | int == 0
+       and replica_status.stdout | default('') | trim | length > 0)
+      or
+      (slave_status.rc | default(1) | int == 0
+       and slave_status.stdout | default('') | trim | length > 0)
+
 - name: Warn about large scales
   ansible.builtin.debug:
     msg: >-

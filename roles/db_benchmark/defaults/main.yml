@@ -30,6 +30,13 @@ enable_load_tuning: false
 load_tuning_innodb_flush_log_at_trx_commit: 0
 load_tuning_sync_binlog: 0
 
+# Restart-based seed shortcut (skip-log-bin, innodb_doublewrite=OFF). Default on.
+# Disable on primaries with async replicas: -e enable_fast_seed=false
+enable_fast_seed: true
+mysql_service_name: mysql
+mysql_conf_dropin_dir: /etc/my.cnf.d
+mysqladmin_bin: mysqladmin
+
 # Add production FKs on the empty schema (before LOAD DATA).
 apply_source_fks_after_seed: true
 fix_fk_type_mismatch: true
@@ -57,3 +64,5 @@ forbidden_databases:
 
 mysql_session_timeout_sec: 259200
 mysql_retries: 8
+mysql_restart_wait_retries: 60
+mysql_restart_wait_delay_sec: 5

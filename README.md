@@ -57,6 +57,8 @@ The 1B tier refuses to start unless you pass `-e confirm_1b=true`.
 
 `DISABLE KEYS` is a no-op on InnoDB. The empty schema is created with production indexes (and optional FKs), then `LOAD DATA INFILE` runs with `FOREIGN_KEY_CHECKS=0` and `UNIQUE_CHECKS=0`. Adding FKs or secondary indexes after a full `item` table can take hours and crash mysqld; do not rebuild them post-load.
 
+By default (`enable_fast_seed: true`) the playbook writes `/etc/my.cnf.d/zz-wc-bench-fast-seed.cnf` (`skip-log-bin`, `innodb_doublewrite=OFF`, `innodb_flush_log_at_trx_commit=0`, `sync_binlog=0`), restarts mysqld, loads data, removes the drop-in, and restarts again **before** ANALYZE and timed ALTERs. That affects the **whole instance**, not only `test_wc_*`. Use `-e enable_fast_seed=false` on primaries with async replicas (skip-log-bin would not replicate the load). Override `mysql_service_name` (default `mysql`) and `mysql_conf_dropin_dir` (default `/etc/my.cnf.d`; Debian often `/etc/mysql/mysql.conf.d`).
+
 ## Run
 
 ```bash
@@ -103,8 +105,11 @@ ansible-playbook site.yml -e row_count_preset=1m -e keep_database=true
 # Skip datadir free-space assertion
 ansible-playbook site.yml -e row_count_preset=1m -e skip_disk_check=true
 
-# Faster loads on a dedicated box (GLOBAL tunables; restored in an always block)
-ansible-playbook site.yml -e row_count_preset=1m -e enable_load_tuning=true
+# Faster loads without a mysqld restart (SET GLOBAL only; restored afterwards)
+ansible-playbook site.yml -e row_count_preset=1m -e enable_fast_seed=false -e enable_load_tuning=true
+
+# Replica / cluster hosts: do not use skip-log-bin during seed
+ansible-playbook site.yml -e row_count_preset=1m -e enable_fast_seed=false
 ```
 
 Output:
@@ -120,5 +125,6 @@ Step 6 converts `item.item_id` to `BIGINT` while `snoozed_item.snoozed_item_id` 
 ## Safety
 
 - Target names are always `test_wc_*`.
-- `enable_load_tuning` changes **global** `innodb_flush_log_at_trx_commit` and `sync_binlog` on the instance. Leave it off on shared servers.
+- `enable_fast_seed` (default true) restarts mysqld twice per tier with `skip-log-bin` and `innodb_doublewrite=OFF` during LOAD DATA only. Never leave this on for a primary with async replicas.
+- `enable_load_tuning` changes **global** `innodb_flush_log_at_trx_commit` and `sync_binlog` without a restart. Leave it off on shared servers. It is skipped when `enable_fast_seed` is true (those knobs are in the drop-in).
 - Default `keep_database: false` drops the test DB after metrics so later tiers (100M / 500M / 1B) can share disk.

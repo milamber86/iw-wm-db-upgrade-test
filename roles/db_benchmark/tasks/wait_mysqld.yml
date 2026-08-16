@@ -1,0 +1,12 @@
+---
+- name: Wait until mysqld accepts connections
+  ansible.builtin.command:
+    argv:
+      - "{{ mysqladmin_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - ping
+  register: mysql_ping
+  until: mysql_ping.rc == 0
+  retries: "{{ mysql_restart_wait_retries | default(60) }}"
+  delay: "{{ mysql_restart_wait_delay_sec | default(5) }}"
+  changed_when: false

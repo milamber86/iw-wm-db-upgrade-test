@@ -29,10 +29,21 @@ staging_dir: auto
 keep_database: false
 
 # Opt-in GLOBAL InnoDB tunables during LOAD DATA (always restored afterwards).
+# No mysqld restart. Use when enable_fast_seed=false but you still want flush/sync shortcuts.
 # Affects the whole MySQL instance — leave false on shared servers.
 enable_load_tuning: false
 load_tuning_innodb_flush_log_at_trx_commit: 0
 load_tuning_sync_binlog: 0
+
+# Restart mysqld around LOAD DATA with skip-log-bin and innodb_doublewrite=OFF (and
+# flush_log_at_trx_commit=0 / sync_binlog=0). Restored before ANALYZE and ALTER timings.
+# Affects the whole instance. Default on; disable on replica/cluster hosts:
+#   ansible-playbook site.yml -e enable_fast_seed=false
+enable_fast_seed: true
+mysql_service_name: mysql
+# RHEL/Percona: /etc/my.cnf.d   Debian/Ubuntu: /etc/mysql/mysql.conf.d
+mysql_conf_dropin_dir: /etc/my.cnf.d
+mysqladmin_bin: mysqladmin
 
 # Add production FKs on the empty schema (before LOAD DATA) so Step 1 DROP FOREIGN KEY
 # is a real timed operation. Do not add FKs after load — that ALTER scans item and can crash mysqld.

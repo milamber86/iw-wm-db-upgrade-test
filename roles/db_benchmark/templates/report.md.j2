@@ -50,6 +50,7 @@ This report times the INT→BIGINT and folder-redesign SQL pipeline against isol
 | `innodb_autoinc_lock_mode` | {{ env.innodb_autoinc_lock_mode | default('n/a') }} |
 | `skip-log-bin` | {{ env.skip_log_bin | default('n/a') }} (`log_bin`={{ env.log_bin | default('n/a') }}) |
 | `innodb_doublewrite` | {{ env.innodb_doublewrite | default('n/a') }} |
+| Fast seed (LOAD DATA) | {{ env.enable_fast_seed | default('n/a') }} |
 | datadir | `{{ env.datadir | default('n/a') }}` |
 | datadir free (at collection) | {{ human_bytes(env.datadir_avail_bytes | default(0)) }} / {{ human_bytes(env.datadir_total_bytes | default(0)) }} |
 | `secure_file_priv` | `{{ env.secure_file_priv | default('n/a') }}` |
@@ -70,6 +71,8 @@ Additional MySQL variables:
 ## Seeding method
 
 The empty schema is created with production indexes (and optional source FKs). Rows are loaded with `LOAD DATA INFILE` under `FOREIGN_KEY_CHECKS=0` / `UNIQUE_CHECKS=0`. Post-load `ALTER TABLE ... ADD INDEX` / `ADD CONSTRAINT` is not used (it can crash mysqld on a populated `item` table).
+
+When `enable_fast_seed` is true (default), mysqld is restarted with a temporary drop-in (`skip-log-bin`, `innodb_doublewrite=OFF`, `innodb_flush_log_at_trx_commit=0`, `sync_binlog=0`) for LOAD DATA only, then the drop-in is removed and mysqld is restarted again **before** ANALYZE and timed ALTERs. Seed duration is not a migration metric. Disable with `-e enable_fast_seed=false` on replica/cluster hosts.
 
 ## Per-tier results
 
@@ -92,6 +95,9 @@ _No tiers completed._
 | Items | {{ tier.seed.item_count | default('n/a') }} |
 | Snoozed items | {{ tier.seed.snoozed_count | default('n/a') }} |
 | Seed mode | {{ tier.seed.seed_mode | default('n/a') }} |
+| Fast seed | {{ tier.seed.enable_fast_seed | default('n/a') }} |
+| `log_bin` after seed revert | {{ tier.seed.log_bin_after_revert | default('n/a') }} |
+| `innodb_doublewrite` after seed revert | {{ tier.seed.innodb_doublewrite_after_revert | default('n/a') }} |
 | Total seed time | {{ tier.seed.elapsed_human | default(tier.seed.elapsed_seconds | default('n/a')) }} |
 | LOAD DATA time | {{ tier.seed.load_human | default(tier.seed.load_seconds | default('n/a')) }} |
 | Index rebuild time | {{ tier.seed.index_build_human | default(tier.seed.index_build_seconds | default('n/a')) }} |

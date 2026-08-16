@@ -1,0 +1,71 @@
+---
+- name: Resolve fast-seed drop-in path
+  ansible.builtin.set_fact:
+    fast_seed_dropin_path: "{{ mysql_conf_dropin_dir }}/zz-wc-bench-fast-seed.cnf"
+
+- name: Stat fast-seed drop-in
+  ansible.builtin.stat:
+    path: "{{ fast_seed_dropin_path }}"
+  register: fast_seed_dropin_stat
+  become: true
+
+- name: Set innodb_fast_shutdown=2 before revert restart
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - -e
+      - SET GLOBAL innodb_fast_shutdown=2
+  when: fast_seed_dropin_stat.stat.exists | default(false)
+  failed_when: false
+
+- name: Remove fast-seed MySQL drop-in
+  ansible.builtin.file:
+    path: "{{ fast_seed_dropin_path }}"
+    state: absent
+  become: true
+  register: fast_seed_dropin_removed
+  when: fast_seed_dropin_stat.stat.exists | default(false)
+
+- name: Restart mysqld to restore original durability settings
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name }}"
+    state: restarted
+  become: true
+  register: fast_seed_revert_restart
+  failed_when: false
+  when: fast_seed_dropin_stat.stat.exists | default(false)
+
+- name: Wait for mysqld after fast-seed revert
+  block:
+    - name: Wait until mysqld accepts connections after revert
+      ansible.builtin.include_tasks: wait_mysqld.yml
+  rescue:
+    - name: Warn that mysqld did not return after fast-seed revert
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: mysqld did not accept connections after removing
+          {{ fast_seed_dropin_path }} and restarting {{ mysql_service_name }}.
+          The instance may still be in the fast-seed configuration.
+          Check systemctl status {{ mysql_service_name }} and the MySQL error log.
+  when: fast_seed_dropin_stat.stat.exists | default(false)
+
+- name: Record post-revert log_bin and innodb_doublewrite
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: fast_seed_after_revert_raw
+  changed_when: false
+  failed_when: false
+
+- name: Store post-revert durability settings
+  ansible.builtin.set_fact:
+    fast_seed_log_bin_after: "{{ (fast_seed_after_revert_raw.stdout.split('\t')[0] | trim) if (fast_seed_after_revert_raw.stdout | default('') | length > 0) else 'n/a' }}"
+    fast_seed_doublewrite_after: "{{ (fast_seed_after_revert_raw.stdout.split('\t')[1] | trim) if ('\t' in (fast_seed_after_revert_raw.stdout | default(''))) else 'n/a' }}"
+    fast_seed_dropin_written: false

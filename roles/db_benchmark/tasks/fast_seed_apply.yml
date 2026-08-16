@@ -1,0 +1,124 @@
+---
+- name: Resolve fast-seed drop-in path
+  ansible.builtin.set_fact:
+    fast_seed_dropin_path: "{{ mysql_conf_dropin_dir }}/zz-wc-bench-fast-seed.cnf"
+
+- name: Require MySQL drop-in directory
+  ansible.builtin.stat:
+    path: "{{ mysql_conf_dropin_dir }}"
+  register: fast_seed_dropin_dir
+  become: true
+
+- name: Fail when MySQL drop-in directory is missing
+  ansible.builtin.assert:
+    that:
+      - fast_seed_dropin_dir.stat.exists | default(false)
+      - fast_seed_dropin_dir.stat.isdir | default(false)
+    fail_msg: >-
+      enable_fast_seed needs a MySQL drop-in directory at {{ mysql_conf_dropin_dir }}.
+      Set mysql_conf_dropin_dir (RHEL/Percona: /etc/my.cnf.d, Debian: /etc/mysql/mysql.conf.d)
+      or pass -e enable_fast_seed=false.
+
+- name: Read current log_bin and innodb_doublewrite
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: fast_seed_before_raw
+  changed_when: false
+
+- name: Parse current durability settings
+  ansible.builtin.set_fact:
+    fast_seed_log_bin_before: "{{ fast_seed_before_raw.stdout.split('\t')[0] | trim }}"
+    fast_seed_doublewrite_before: "{{ fast_seed_before_raw.stdout.split('\t')[1] | trim }}"
+
+- name: Detect whether fast-seed knobs are already active
+  ansible.builtin.set_fact:
+    fast_seed_already_active: "{{ (fast_seed_log_bin_before | string | lower) in ['0', 'off'] and (fast_seed_doublewrite_before | string | lower) in ['0', 'off'] }}"
+
+- name: Skip drop-in when skip-log-bin and innodb_doublewrite=OFF are already set
+  ansible.builtin.debug:
+    msg: >-
+      Fast-seed knobs already active (log_bin={{ fast_seed_log_bin_before }},
+      innodb_doublewrite={{ fast_seed_doublewrite_before }}). No mysqld restart for apply.
+  when: fast_seed_already_active | bool
+
+- name: Write fast-seed MySQL drop-in
+  ansible.builtin.copy:
+    dest: "{{ fast_seed_dropin_path }}"
+    mode: "0644"
+    content: |
+      # Temporary IceWarp WC benchmark seed shortcut. Removed after LOAD DATA.
+      [mysqld]
+      skip-log-bin
+      innodb_doublewrite=OFF
+      innodb_flush_log_at_trx_commit=0
+      sync_binlog=0
+  become: true
+  register: fast_seed_dropin_copy
+  when: not (fast_seed_already_active | bool)
+
+- name: Remember whether this play wrote the fast-seed drop-in
+  ansible.builtin.set_fact:
+    fast_seed_dropin_written: "{{ not (fast_seed_already_active | bool) }}"
+
+- name: Set innodb_fast_shutdown=2 before apply restart
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - -e
+      - SET GLOBAL innodb_fast_shutdown=2
+  when:
+    - not (fast_seed_already_active | bool)
+    - fast_seed_dropin_written | bool
+  failed_when: false
+
+- name: Restart mysqld to apply fast-seed knobs
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name }}"
+    state: restarted
+  become: true
+  when:
+    - not (fast_seed_already_active | bool)
+    - fast_seed_dropin_written | bool
+
+- name: Wait for mysqld after fast-seed apply
+  ansible.builtin.include_tasks: wait_mysqld.yml
+  when:
+    - not (fast_seed_already_active | bool)
+    - fast_seed_dropin_written | bool
+
+- name: Verify skip-log-bin and innodb_doublewrite=OFF
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - --defaults-extra-file={{ mysql_defaults_file }}
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: fast_seed_after_apply_raw
+  changed_when: false
+  when: enable_fast_seed | bool
+
+- name: Require fast-seed knobs after apply restart
+  ansible.builtin.assert:
+    that:
+      - (fast_seed_after_apply_raw.stdout.split('\t')[0] | trim | string | lower) in ['0', 'off']
+      - (fast_seed_after_apply_raw.stdout.split('\t')[1] | trim | string | lower) in ['0', 'off']
+    fail_msg: >-
+      Fast-seed apply left log_bin={{ fast_seed_after_apply_raw.stdout.split('\t')[0] | default('?') }}
+      innodb_doublewrite={{ fast_seed_after_apply_raw.stdout.split('\t')[1] | default('?') }}.
+      Check {{ fast_seed_dropin_path }} and mysql_service_name={{ mysql_service_name }}.
+  when:
+    - enable_fast_seed | bool
+    - fast_seed_after_apply_raw is defined
+    - fast_seed_after_apply_raw.stdout is defined
+    - fast_seed_after_apply_raw.stdout | length > 0

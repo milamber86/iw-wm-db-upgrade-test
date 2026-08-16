@@ -83,6 +83,7 @@
       innodb_ddl_threads: "{{ mysql_vars['innodb_ddl_threads'] | default('n/a') }}"
       innodb_parallel_read_threads: "{{ mysql_vars['innodb_parallel_read_threads'] | default('n/a') }}"
       innodb_autoinc_lock_mode: "{{ mysql_vars['innodb_autoinc_lock_mode'] | default('n/a') }}"
+      enable_fast_seed: "{{ enable_fast_seed | bool }}"
       log_bin: "{{ mysql_log_bin }}"
       skip_log_bin: "{{ mysql_skip_log_bin | trim }}"
       innodb_doublewrite: "{{ mysql_innodb_doublewrite }}"
