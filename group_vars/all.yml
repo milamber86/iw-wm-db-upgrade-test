@@ -2,13 +2,13 @@
 # Target row counts. Override at the CLI, for example:
 #   ansible-playbook site.yml -e '{"row_counts": [10000000]}'
 #   ansible-playbook site.yml -e row_count_preset=10m
-# Known scales: 1m (1e6), 5m (5e6), 10m (1e7), 15m (1.5e7), 20m (2e7), 30m (3e7), 100m (1e8), 500m (5e8), 1b (1e9)
+# Known scales: 1m (1e6), 3m (3e6), 5m (5e6), 10m (1e7), 15m (1.5e7), 20m (2e7), 30m (3e7), 100m (1e8), 500m (5e8), 1b (1e9)
 row_counts:
   - 1000000
   - 100000000
   - 1000000000
 
-# Optional preset: 1m | 5m | 10m | 15m | 20m | 30m | 100m | 500m | 1b | all (empty = use row_counts as-is)
+# Optional preset: 1m | 3m | 5m | 10m | 15m | 20m | 30m | 100m | 500m | 1b | all (empty = use row_counts as-is)
 row_count_preset: ""
 
 # 1B tier refuses to run unless explicitly confirmed (disk + multi-day DDL).

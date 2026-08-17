@@ -7,6 +7,7 @@ confirm_1b: false
 # Named test databases for known scales; anything else becomes test_wc_<N>r
 scale_db_names:
   "1000000": test_wc_1m
+  "3000000": test_wc_3m
   "5000000": test_wc_5m
   "10000000": test_wc_10m
   "15000000": test_wc_15m
