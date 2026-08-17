@@ -57,7 +57,7 @@ The 1B tier refuses to start unless you pass `-e confirm_1b=true`.
 1. Edit `inventory.ini`: `ansible_host`, `ansible_user`, `mysql_user`, `mysql_password` (and `mysql_socket` if you do not use TCP).
 2. Review knobs in `group_vars/all.yml` (`batch_size`, `seed_workers`, `keep_database`, …).
 
-`DISABLE KEYS` is a no-op on InnoDB. The empty schema is created with production indexes (and optional FKs), then `LOAD DATA INFILE` runs with `FOREIGN_KEY_CHECKS=0` and `UNIQUE_CHECKS=0`. Adding FKs or secondary indexes after a full `item` table can take hours and crash mysqld; do not rebuild them post-load.
+`DISABLE KEYS` is a no-op on InnoDB. The empty schema is created with production indexes (and the optional snoozed_item FK), then `LOAD DATA INFILE` runs with `FOREIGN_KEY_CHECKS=0` and `UNIQUE_CHECKS=0`. Adding FKs or secondary indexes after a full `item` table can take hours and crash mysqld; do not rebuild them post-load.
 
 By default (`enable_fast_seed: true`) the playbook writes `/etc/my.cnf.d/zz-wc-bench-fast-seed.cnf` (`skip-log-bin`, `innodb_doublewrite=OFF`, `innodb_flush_log_at_trx_commit=0`, `sync_binlog=0`), restarts mysqld, loads data, removes the drop-in, and restarts again **before** ANALYZE and timed ALTERs. That affects the **whole instance**, not only `test_wc_*`. Use `-e enable_fast_seed=false` on primaries with async replicas (skip-log-bin would not replicate the load). Override `mysql_service_name` (default `mysql`) and `mysql_conf_dropin_dir` (default `/etc/my.cnf.d`; Debian often `/etc/mysql/mysql.conf.d`).
 
@@ -123,9 +123,9 @@ Output:
 - `reports/benchmark_run_YYYYMMDDThhmmss.json` — full machine-readable results
 - `reports/results_<database>_statements_YYYYMMDDThhmmss.json` — crash-safe per-statement log
 
-## Migration SQL gap
+## Migration SQL
 
-Step 6 converts `item.item_id` to `BIGINT` while `snoozed_item.snoozed_item_id` stays `INT`. MySQL then rejects the Step 7 foreign key (incompatible types). With `fix_fk_type_mismatch: true` (default) the playbook times an extra `MODIFY snoozed_item_id BIGINT` and retries the FK so Steps 8–10 can run.
+Timed statements in `files/migration_steps.yml` match the production script: orphan `DELETE` first, drop `snoozed_item_ibfk_1`, widen `folder` IDs, then one combined `item` ALTER (BIGINT columns + `FK_item_folder`), then `snoozed_item` BIGINT + FK together. The harness adds only the snoozed FK on the empty schema so that DROP is real; it does not pre-create `FK_item_folder`.
 
 ## Safety
 

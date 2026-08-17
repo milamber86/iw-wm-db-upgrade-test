@@ -46,13 +46,10 @@ mysql_cnf_path: /etc/my.cnf
 mysql_conf_dropin_dir: /etc/my.cnf.d
 mysqladmin_bin: mysqladmin
 
-# Add production FKs on the empty schema (before LOAD DATA) so Step 1 DROP FOREIGN KEY
-# is a real timed operation. Do not add FKs after load — that ALTER scans item and can crash mysqld.
+# Add the production snoozed_item FK on the empty schema (before LOAD DATA)
+# so Step 2 DROP FOREIGN KEY is a real timed operation. Do not add FKs after load
+# or add FK_item_folder (the migration ADDs that during the combined item ALTER).
 apply_source_fks_after_seed: true
-
-# Step 6 promotes item.item_id to BIGINT; snoozed_item.snoozed_item_id stays INT.
-# If Step 7 FK fails with a type mismatch, ALTER snoozed_item_id to BIGINT and retry.
-fix_fk_type_mismatch: true
 
 # Disk preflight: require free bytes >= rows * this * 2.5 (COPY ALTER duplicates the table).
 bytes_per_item_estimate: 2048

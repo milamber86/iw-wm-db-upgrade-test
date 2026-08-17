@@ -87,69 +87,6 @@
     timed_result: "{{ timed_raw.stdout | from_json }}"
   when: timed_raw is not skipped
 
-- name: Recover Step 7 FK type mismatch
-  when:
-    - timed_raw is not skipped
-    - timed_result.status | default('') == 'failed'
-    - mig_stmt.name == 'add_fk_snoozed_item_item'
-    - fix_fk_type_mismatch | bool
-  block:
-    - name: Widen snoozed_item_id to BIGINT
-      ansible.builtin.command:
-        argv:
-          - python3
-          - "{{ remote_scripts_dir }}/timed_sql.py"
-          - --defaults-extra-file
-          - "{{ mysql_defaults_file }}"
-          - --database
-          - "{{ tier_db_name }}"
-          - --mysql-bin
-          - "{{ mysql_bin }}"
-          - --sql
-          - ALTER TABLE snoozed_item MODIFY COLUMN snoozed_item_id BIGINT NOT NULL
-          - --tables
-          - snoozed_item
-          - --results-file
-          - "{{ remote_statements_file }}"
-          - --step
-          - "7"
-          - --name
-          - fix_snoozed_item_id_bigint
-          - --session-timeout
-          - "{{ mysql_session_timeout_sec | string }}"
-      async: "{{ mysql_ddl_timeout_sec | int }}"
-      poll: "{{ mysql_ddl_poll_sec | int }}"
-      register: fix_type_raw
-      failed_when: (fix_type_raw.rc | default(1) | int) > 1
-
-    - name: Retry snoozed_item foreign key
-      ansible.builtin.command:
-        argv:
-          - python3
-          - "{{ remote_scripts_dir }}/timed_sql.py"
-          - --defaults-extra-file
-          - "{{ mysql_defaults_file }}"
-          - --database
-          - "{{ tier_db_name }}"
-          - --mysql-bin
-          - "{{ mysql_bin }}"
-          - --sql
-          - "{{ mig_stmt.sql | trim }}"
-          - --tables
-          - "{{ (mig_stmt.tables | default([])) | join(',') }}"
-          - --results-file
-          - "{{ remote_statements_file }}"
-          - --step
-          - "7"
-          - --name
-          - add_fk_snoozed_item_item_retry
-          - --session-timeout
-          - "{{ mysql_session_timeout_sec | string }}"
-      async: "{{ mysql_ddl_timeout_sec | int }}"
-      poll: "{{ mysql_ddl_poll_sec | int }}"
-      register: retry_fk_raw
-      failed_when: (retry_fk_raw.rc | default(1) | int) != 0
-
 - name: Fetch statement log to control node
   ansible.builtin.fetch:
     src: "{{ remote_statements_file }}"
@@ -165,4 +102,3 @@
   when:
     - timed_raw is not skipped
     - timed_result.status | default('') == 'failed'
-    - not (mig_stmt.name == 'add_fk_snoozed_item_item' and (fix_fk_type_mismatch | bool))

@@ -553,15 +553,7 @@ def apply_source_fks(cfg):
     run_mysql(
         cfg,
         prefix
-        + "ALTER TABLE item ADD CONSTRAINT FK_item_folder "
-        "FOREIGN KEY (folder_id) REFERENCES folder(folder_id) "
-        "ON DELETE CASCADE ON UPDATE CASCADE",
-        database=cfg["database"],
-    )
-    run_mysql(
-        cfg,
-        prefix
-        + "ALTER TABLE snoozed_item ADD CONSTRAINT `_snoozed_item_ibfk_1` "
+        + "ALTER TABLE snoozed_item ADD CONSTRAINT `snoozed_item_ibfk_1` "
         "FOREIGN KEY (snoozed_item_id) REFERENCES item(item_id) "
         "ON DELETE CASCADE ON UPDATE CASCADE",
         database=cfg["database"],
