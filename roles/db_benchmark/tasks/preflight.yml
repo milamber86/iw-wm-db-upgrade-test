@@ -243,6 +243,6 @@
 - name: Warn about large scales
   ansible.builtin.debug:
     msg: >-
-      Scales {{ row_counts }} requested. 5M–30M are tens of GiB; 100M/500M are hundreds of GiB
+      Scales {{ row_counts }} requested. 5M–50M are tens to ~100 GiB; 100M/500M are hundreds of GiB
       to ~1 TiB and hours; 1B is multi-TiB and can take days. COPY ALTER needs ~2.5x table size free
       on {{ mysql_datadir }}.

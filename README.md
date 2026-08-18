@@ -13,6 +13,7 @@ It never touches any already existing database. Each scale uses a disposable dat
 | 15,000,000 | `test_wc_15m` |
 | 20,000,000 | `test_wc_20m` |
 | 30,000,000 | `test_wc_30m` |
+| 50,000,000 | `test_wc_50m` |
 | 100,000,000 | `test_wc_100m` |
 | 500,000,000 | `test_wc_500m` |
 | 1,000,000,000 | `test_wc_1b` |
@@ -46,6 +47,7 @@ InnoDB `COPY` DDL duplicates the table. Budget **~2.5×** the loaded size as fre
 | 15M | ~30 GiB | ~75 GiB | tens of minutes |
 | 20M | ~40 GiB | ~100 GiB | ~1 hour |
 | 30M | ~60 GiB | ~150 GiB | ~1–2 hours |
+| 50M | ~100 GiB | ~250 GiB | ~2–4 hours |
 | 100M | ~200 GiB | ~500 GiB | hours |
 | 500M | ~1 TiB | ~2.5 TiB | many hours |
 | 1B | ~2 TiB | ~4–5 TiB | many hours to days |
@@ -87,6 +89,9 @@ ansible-playbook site.yml -e row_count_preset=20m
 
 # 30M
 ansible-playbook site.yml -e row_count_preset=30m
+
+# 50M
+ansible-playbook site.yml -e row_count_preset=50m
 
 # 100M
 ansible-playbook site.yml -e row_count_preset=100m

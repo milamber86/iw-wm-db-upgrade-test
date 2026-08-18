@@ -20,6 +20,7 @@
 {%- elif rows | int == 15000000 -%}15M
 {%- elif rows | int == 20000000 -%}20M
 {%- elif rows | int == 30000000 -%}30M
+{%- elif rows | int == 50000000 -%}50M
 {%- elif rows | int == 100000000 -%}100M
 {%- elif rows | int == 500000000 -%}500M
 {%- elif rows | int == 1000000000 -%}1B
@@ -202,7 +203,7 @@ These are planning notes from this benchmark, not a go-live runbook.
 7. **Foreign keys.** The source schema has `snoozed_item_ibfk_1` only (this harness adds it on the empty table via `apply_source_fks_after_seed`). Step 2 drops it. Step 4 ADDs `FK_item_folder` while rebuilding `item`. Step 5 widens `snoozed_item_id` to BIGINT and ADDs `FK_snoozed_item_item` in the same statement. Do not pre-create `FK_item_folder` or Step 4 will fail.
 8. **Orphan deletes (Step 1).** With consistent seed data the `DELETE ... LEFT JOIN` still scans `item`. On 100M/500M/1B that can rival an ALTER. Run `EXPLAIN` / consider chunked deletes in production if orphans are rare but the nested-loop join is not.
 9. **Step 6–7** are metadata-scale (folders/accounts), not `item`-scale, unless you have millions of folders. Still avoid mixing them in the same lock window as Step 4.
-10. **Start with 1M, then 3M/5M/10M, then 15M–30M, then 100M, on production-like storage (same SSD/RAID, same `innodb_io_capacity`).** Do not extrapolate 1M durations linearly to 500M or 1B; rebuilds are roughly linear in table bytes plus a large constant for index build, and can go superlinear when the working set spills the buffer pool.
+10. **Start with 1M, then 3M/5M/10M, then 15M–50M, then 100M, on production-like storage (same SSD/RAID, same `innodb_io_capacity`).** Do not extrapolate 1M durations linearly to 500M or 1B; rebuilds are roughly linear in table bytes plus a large constant for index build, and can go superlinear when the working set spills the buffer pool.
 
 {% set ns_rec = namespace(heavy=false) %}
 {% for tier in tiers %}
