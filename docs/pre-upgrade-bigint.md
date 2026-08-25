@@ -2,7 +2,7 @@
 
 This runbook is for **on-premise DBAs** with a large `item` table. It applies the **heavy INT→BIGINT work before** the IceWarp product upgrade, so the installer is not stuck on a multi-hour table rebuild.
 
-After these steps succeed, **IceWarp 14.3 can keep running** on the widened schema until you install the new version. The later folder redesign (`RENAME TABLE folder`, `account` / `account_folders`, compatibility view) is **not** in this document — leave that to the product upgrade.
+After these steps succeed, **IceWarp 14.3 can keep running** on the widened schema until you install the new version.
 
 **Do not run this against a database you cannot restore.** There is no practical rollback once `item_id` / `folder_id` exist as `BIGINT`.
 
@@ -70,8 +70,6 @@ Widening INT→BIGINT is backward compatible for the running product (clients st
 
 - **`FK_item_folder` … ON DELETE CASCADE** is new. If the old application deleted folders and left items behind, CASCADE now deletes those items. That is a behavior change while still on IceWarp 14.3.
 - There is **no practical rollback** to INT if any id exceeds 2³¹−1, and even below that a reverse ALTER is another full rebuild.
-
-Do **not** run `RENAME TABLE folder TO folders` or create `account` / `account_folders` / the `folder` view until the IceWarp upgrade.
 
 ---
 
