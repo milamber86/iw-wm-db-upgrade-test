@@ -36,7 +36,7 @@ All of the following must be true in `<wc_database>`:
 - Foreign key `FK_snoozed_item_item` exists on `snoozed_item(snoozed_item_id)` → `item(item_id)`
 - Foreign key `snoozed_item_ibfk_1` is **gone**
 
-If this is already true, **stop**. Do not re-run the ALTERs. Skip these statements in the IceWarp upgrade as well (see [section 13](#13-icewarp-upgrade--skip-if-already-done)).
+If this is already true, **stop**. Do not re-run the ALTERs.
 
 ---
 
@@ -58,7 +58,7 @@ Do not start step 1 until every box is checked.
 - [ ] Windows / native path: IceWarp stop and start procedure known; copy of `my.ini` saved if you will use downtime speed knobs.
 - [ ] Native SQL will run with `SET SESSION old_alter_table=0`.
 
-Copy-paste commands: [section 15](#15-commands-cheat-sheet).
+Copy-paste commands: [section 14](#14-commands-cheat-sheet).
 
 ---
 
@@ -271,9 +271,9 @@ pt-online-schema-change \
 
 Create `/tmp/pt-osc.pause` to pause copying under load; remove the file to resume. Tune `--max-load` / `--chunk-time` for the host. Watch replica lag and binlog disk. **Do not `skip-log-bin`.**
 
-If the job fails, drop leftover `_item_new` (name may vary) and pt-osc triggers on `item` before retrying. See [section 13](#13-failure-and-resume).
+If the job fails, drop leftover `_item_new` (name may vary) and pt-osc triggers on `item` before retrying. See [section 12](#12-failure-and-resume).
 
-**Windows / Linux native fallback:** stop IceWarp first. Optional speed knobs: [section 12](#12-downtime-path-speed-knobs-native-alter-only) (standalone only, or replica-rebuild procedure).
+**Windows / Linux native fallback:** stop IceWarp first. Optional speed knobs: [section 11](#11-downtime-path-speed-knobs-native-alter-only) (standalone only, or replica-rebuild procedure).
 
 ```sql
 ALTER TABLE item MODIFY COLUMN folder_id BIGINT NOT NULL, ADD CONSTRAINT FK_item_folder FOREIGN KEY (folder_id) REFERENCES folder(folder_id) ON DELETE CASCADE ON UPDATE CASCADE, MODIFY COLUMN item_id BIGINT NOT NULL AUTO_INCREMENT, MODIFY COLUMN size BIGINT NOT NULL, MODIFY COLUMN source_folder_id BIGINT, MODIFY COLUMN dummy_id BIGINT;
@@ -366,21 +366,7 @@ After the native ALTERs: **delete the drop-in / restore `my.ini`**, `SET GLOBAL 
 
 ---
 
-## 13. IceWarp upgrade — skip if already done
-
-This repository cannot make the IceWarp installer idempotent. If the upgrade script still contains these statements, **skip them** when verification in [section 2](#2-what-done-looks-like) already passes:
-
-- `DELETE item FROM item LEFT JOIN folder …`
-- `ALTER TABLE snoozed_item DROP FOREIGN KEY snoozed_item_ibfk_1`
-- `ALTER TABLE folder MODIFY COLUMN folder_id BIGINT …`
-- `ALTER TABLE item MODIFY COLUMN folder_id BIGINT … ADD CONSTRAINT FK_item_folder …`
-- `ALTER TABLE snoozed_item MODIFY COLUMN snoozed_item_id BIGINT … ADD CONSTRAINT FK_snoozed_item_item …`
-
-If `snoozed_item_ibfk_1` is already gone, a DROP of that name will fail. If `FK_item_folder` already exists, adding it again will fail.
-
----
-
-## 14. MySQL 5.7 vs 8.0
+## 13. MySQL 5.7 vs 8.0
 
 | Topic | 5.7 | 8.0 |
 |-------|-----|-----|
@@ -394,7 +380,7 @@ If `snoozed_item_ibfk_1` is already gone, a DROP of that name will fail. If `FK_
 
 ---
 
-## 15. Commands cheat-sheet
+## 14. Commands cheat-sheet
 
 Set the database once:
 
