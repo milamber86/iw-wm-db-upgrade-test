@@ -36,7 +36,7 @@ All of the following must be true in `<wc_database>`:
 - Foreign key `FK_snoozed_item_item` exists on `snoozed_item(snoozed_item_id)` → `item(item_id)`
 - Foreign key `snoozed_item_ibfk_1` is **gone**
 
-If this is already true, **stop**. Do not re-run the ALTERs. Skip these statements in the IceWarp upgrade as well (see [section 14](#14-icewarp-upgrade--skip-if-already-done)).
+If this is already true, **stop**. Do not re-run the ALTERs. Skip these statements in the IceWarp upgrade as well (see [section 13](#13-icewarp-upgrade--skip-if-already-done)).
 
 ---
 
@@ -58,7 +58,7 @@ Do not start step 1 until every box is checked.
 - [ ] Windows / native path: IceWarp stop and start procedure known; copy of `my.ini` saved if you will use downtime speed knobs.
 - [ ] Native SQL will run with `SET SESSION old_alter_table=0`.
 
-Copy-paste commands: [section 16](#16-commands-cheat-sheet).
+Copy-paste commands: [section 15](#15-commands-cheat-sheet).
 
 ---
 
@@ -139,7 +139,7 @@ Do **not** use `skip-log-bin` (replicas would diverge). `innodb_flush_log_at_trx
 Only if you accept rebuilding every replica:
 
 1. Stop IceWarp. `STOP REPLICA` / `STOP SLAVE` on all replicas (or remove them from rotation).
-2. On the **primary only**, apply downtime speed knobs including `skip-log-bin` ([section 12](#12-downtime-path-speed-knobs-native-alter-only)).
+2. On the **primary only**, apply downtime speed knobs including `skip-log-bin` ([section 11](#11-downtime-path-speed-knobs-native-alter-only)).
 3. Run native ALTERs. Restore durability and binary logging; restart mysqld.
 4. **Rebuild every replica** from a new primary backup or clone. Binlog position is useless after `skip-log-bin`.
 
@@ -321,18 +321,7 @@ Smoke-test the webclient: list folders, open mail, snooze an item if that featur
 
 ---
 
-## 11. Do not run yet
-
-Leave these for the IceWarp product upgrade:
-
-- `RENAME TABLE folder TO folders`
-- `CREATE TABLE account` / `INSERT` / `ANALYZE`
-- `account_folders` and related `UPDATE` / `ALTER`
-- `CREATE VIEW folder AS …`
-
----
-
-## 12. Downtime-path speed knobs (native ALTER only)
+## 11. Downtime-path speed knobs (native ALTER only)
 
 Use only when IceWarp is **stopped** and you use **native** `ALTER TABLE` (Windows primary path, or Linux fallback). **Do not** use these with pt-osc.
 
@@ -366,7 +355,7 @@ After the native ALTERs: **delete the drop-in / restore `my.ini`**, `SET GLOBAL 
 
 ---
 
-## 13. Failure and resume
+## 12. Failure and resume
 
 | Situation | Action |
 |-----------|--------|
@@ -377,7 +366,7 @@ After the native ALTERs: **delete the drop-in / restore `my.ini`**, `SET GLOBAL 
 
 ---
 
-## 14. IceWarp upgrade — skip if already done
+## 13. IceWarp upgrade — skip if already done
 
 This repository cannot make the IceWarp installer idempotent. If the upgrade script still contains these statements, **skip them** when verification in [section 2](#2-what-done-looks-like) already passes:
 
@@ -391,7 +380,7 @@ If `snoozed_item_ibfk_1` is already gone, a DROP of that name will fail. If `FK_
 
 ---
 
-## 15. MySQL 5.7 vs 8.0
+## 14. MySQL 5.7 vs 8.0
 
 | Topic | 5.7 | 8.0 |
 |-------|-----|-----|
@@ -405,7 +394,7 @@ If `snoozed_item_ibfk_1` is already gone, a DROP of that name will fail. If `FK_
 
 ---
 
-## 16. Commands cheat-sheet
+## 15. Commands cheat-sheet
 
 Set the database once:
 
