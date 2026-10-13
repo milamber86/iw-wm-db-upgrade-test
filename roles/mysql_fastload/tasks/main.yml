@@ -1,0 +1,22 @@
+---
+# Percona Server for MySQL 8.0 for IceWarp (single node).
+# Order matters: /etc/my.cnf is written BEFORE the first server start so the
+# datadir is initialized with lower_case_table_names=1.
+
+- name: Apply Linux settings for MySQL
+  ansible.builtin.include_tasks: 01_linux_settings.yml
+
+- name: Configure Percona repositories
+  ansible.builtin.include_tasks: 02_packages.yml
+
+- name: Install and configure Percona Server 8.0
+  ansible.builtin.include_tasks: 03_mysql_install.yml
+
+- name: Initialize MySQL and set root credentials
+  ansible.builtin.include_tasks: 04_mysql_init.yml
+
+- name: Create IceWarp databases and user
+  ansible.builtin.include_tasks: 05_mysql_databases.yml
+
+- name: Configure MySQL firewall
+  ansible.builtin.include_tasks: 06_firewall.yml

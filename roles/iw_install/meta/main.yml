@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_install
+  author: iw-wm-db-upgrade-test
+  description: Download and run a pinned IceWarp installer (fresh install or upgrade over an existing install).
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

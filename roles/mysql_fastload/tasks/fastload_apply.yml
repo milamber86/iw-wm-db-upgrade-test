@@ -1,0 +1,109 @@
+---
+# Apply the fast-import drop-in around the restore window only.
+# A mysqld restart is required for skip-log-bin / innodb_doublewrite.
+
+- name: Skip fast-load tuning when disabled
+  ansible.builtin.debug:
+    msg: "iw_fastload_enabled=false; leaving MySQL durability settings unchanged."
+  when: not (iw_fastload_enabled | bool)
+
+- name: Stat the fast-load drop-in
+  ansible.builtin.stat:
+    path: "{{ iw_fastload_dropin }}"
+  register: iw_fastload_stat
+  become: true
+  when: iw_fastload_enabled | bool
+
+- name: Read the current durability settings
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: iw_fastload_before
+  changed_when: false
+  when:
+    - iw_fastload_enabled | bool
+    - not (iw_fastload_stat.stat.exists | default(false))
+
+- name: Note that fast-load knobs are already active
+  ansible.builtin.debug:
+    msg: >-
+      Fast-load drop-in already present ({{ iw_fastload_dropin }});
+      log_bin/doublewrite before = {{ iw_fastload_before.stdout | default('n/a') }}.
+  when:
+    - iw_fastload_enabled | bool
+    - iw_fastload_stat.stat.exists | default(false)
+
+- name: Write the fast-load drop-in
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../files/iw_my_fastload.cnf"
+    dest: "{{ iw_fastload_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when:
+    - iw_fastload_enabled | bool
+    - not (iw_fastload_stat.stat.exists | default(false))
+  register: iw_fastload_written
+
+- name: Request a fast shutdown for the apply restart
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - SET GLOBAL innodb_fast_shutdown=2
+  when:
+    - iw_fastload_enabled | bool
+    - iw_fastload_written is changed
+  failed_when: false
+  changed_when: false
+
+- name: Restart mysqld to apply the fast-load knobs
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name }}"
+    state: restarted
+  become: true
+  when:
+    - iw_fastload_enabled | bool
+    - iw_fastload_written is changed
+
+- name: Wait for mysqld after fast-load apply
+  ansible.builtin.include_tasks: wait_mysqld.yml
+  when:
+    - iw_fastload_enabled | bool
+    - iw_fastload_written is changed
+
+- name: Verify the fast-load knobs are active
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: iw_fastload_after
+  changed_when: false
+  when: iw_fastload_enabled | bool
+
+- name: Require log_bin=OFF and innodb_doublewrite=OFF after apply
+  ansible.builtin.assert:
+    that:
+      - (iw_fastload_after.stdout.split('\t')[0] | trim | lower) in ['0', 'off']
+      - (iw_fastload_after.stdout.split('\t')[1] | trim | lower) in ['0', 'off']
+    fail_msg: >-
+      Fast-load apply did not take effect (log_bin/doublewrite =
+      {{ iw_fastload_after.stdout | default('n/a') }}).
+      Check {{ iw_fastload_dropin }} and mysql_service_name={{ mysql_service_name }}.
+  when:
+    - iw_fastload_enabled | bool
+    - iw_fastload_after.stdout is defined
+    - iw_fastload_after.stdout | length > 0

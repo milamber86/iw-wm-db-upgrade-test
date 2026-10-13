@@ -1,0 +1,89 @@
+---
+# Runs on the production host (delegate_to prod). Removes every rule tagged with
+# prod_firewall_comment, in the always block of the restore role.
+
+- name: Remove the tagged iptables exception (iptables backend)
+  ansible.builtin.shell: |
+    set -uo pipefail
+    CMT="{{ prod_firewall_comment }}"
+    SRC="{{ prod_access_source }}"
+    removed=0
+    while iptables -C INPUT -s "$SRC" -p tcp --dport 22 -m comment --comment "$CMT" -j ACCEPT 2>/dev/null; do
+      iptables -D INPUT -s "$SRC" -p tcp --dport 22 -m comment --comment "$CMT" -j ACCEPT
+      removed=$((removed + 1))
+    done
+    echo "REMOVED:$removed"
+  args:
+    executable: /bin/bash
+  register: iw_prod_ipt_del
+  changed_when: "'REMOVED:0' not in (iw_prod_ipt_del.stdout | default('REMOVED:0'))"
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: (iw_prod_fw_backend | default('iptables')) == 'iptables'
+
+- name: Persist iptables rules after removal
+  ansible.builtin.shell: |
+    if command -v service >/dev/null 2>&1 && service iptables save >/dev/null 2>&1; then
+      echo SAVED
+    else
+      echo NO-SAVE
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when:
+    - (iw_prod_fw_backend | default('iptables')) == 'iptables'
+    - (iw_prod_ipt_del.changed | default(false))
+
+- name: Remove the rich rule (firewalld backend)
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--remove-rich-rule=rule family=\"ipv4\" source address=\"{{ prod_access_source }}\" port port=\"22\" protocol=\"tcp\" accept"
+  register: iw_prod_fwd_del
+  changed_when: "'not' not in (iw_prod_fwd_del.stdout | default('') | lower)"
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: (iw_prod_fw_backend | default('')) == 'firewalld'
+
+- name: Reload firewalld after removal
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: (iw_prod_fw_backend | default('')) == 'firewalld'
+
+- name: Verify the tagged exception is gone
+  ansible.builtin.shell: |
+    CMT="{{ prod_firewall_comment }}"
+    if iptables -S INPUT 2>/dev/null | grep -F -- "$CMT" >/dev/null; then
+      echo PRESENT
+    else
+      echo ABSENT
+    fi
+  args:
+    executable: /bin/bash
+  register: iw_prod_ipt_verify
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: (iw_prod_fw_backend | default('iptables')) == 'iptables'
+
+- name: Assert the production exception was removed
+  ansible.builtin.assert:
+    that:
+      - "'ABSENT' in (iw_prod_ipt_verify.stdout | default('ABSENT'))"
+    fail_msg: >-
+      A rule tagged {{ prod_firewall_comment }} is still present on the
+      production host. Remove it manually: iptables -D INPUT -s
+      {{ prod_access_source }} -p tcp --dport 22 -m comment --comment
+      {{ prod_firewall_comment }} -j ACCEPT
+  when: (iw_prod_fw_backend | default('iptables')) == 'iptables'

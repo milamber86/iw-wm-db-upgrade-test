@@ -1,0 +1,29 @@
+---
+# Download and run one pinned IceWarp installer. The same role installs 14.3
+# (fresh) and runs the 14.4 installer over an existing 14.3 install (upgrade).
+
+iw_install_url: ""
+iw_install_version_id: "unknown"
+iw_install_sha256: ""
+
+iw_install_dir: /opt/icewarp
+iw_run_as_user: icewarp
+iw_download_dir: /var/tmp/iw-install
+iw_log_dir: /var/log/iw
+iw_tool_cmd: "{{ iw_install_dir }}/tool.sh"
+iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
+iw_nfr_license: ""
+iw_storage_paths: {}
+
+# Disable the installer's clean-install guards so it can run over an existing
+# install dir (needed for the 14.4-over-14.3 step; harmless for a fresh install).
+iw_install_patch_guards: true
+iw_install_apply_license: true
+iw_install_start_services: true
+
+# Capture stdout+stderr to {{ iw_log_dir }}/{{ iw_install_log_name }} via tee.
+iw_install_tee_log: false
+iw_install_log_name: "install-{{ iw_install_version_id }}.log"
+
+icewarp_legacy_config_guard: 'if [ -d "$SETUP_INSTALL_DIR" -a "$SETUP_CONFIG_FILE_EXISTS" != "0" ]; then'
+icewarp_existing_dir_guard: 'if [ -d "${SETUP_INSTALL_DIR}" ]; then'

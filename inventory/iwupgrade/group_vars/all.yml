@@ -1,0 +1,177 @@
+---
+# Variables for the IceWarp 14.3 -> 14.4 upgrade test bed.
+# Secrets (production SSH target, MySQL passwords, VM SSH keys) live in
+# group_vars/all/vault.yml (see group_vars/all/vault.yml.example).
+
+# ---------------------------------------------------------------------------
+# Control node / Infralab hypervisor
+# ---------------------------------------------------------------------------
+hypervisor_ip: "185.138.220.201"
+hypervisor_user: "root"
+
+# vpsctl API — reached from the hypervisor itself.
+vps_vm_api_url: "http://127.0.0.1:8765"
+vps_vm_token: "{{ lookup('env', 'VPSCTL_TOKEN') }}"
+
+# ---------------------------------------------------------------------------
+# Test VM (created by roles/iw_provision)
+# ---------------------------------------------------------------------------
+iw_vm_name: iw-wm-upgrade-01
+iw_vm_template: tpl_L1_OB_almalinux9.qcow2
+iw_vm_network: br0-net
+iw_vm_vcpu: 16
+iw_vm_memory_mb: 131072
+iw_vm_disk_gb: 500
+iw_vm_state: started
+iw_vm_wait_timeout: 600
+
+# Cloud-init identity. The vpsctl cloud-init renderer supports a non-root user
+# with passwordless sudo, ssh_keys and an optional password. If the registered
+# template is not a cloud-init image, fall back to a documented existing login
+# (set iw_vm_cloud_user and iw_vm_cloud_init_password from the vault).
+iw_vm_cloud_user: "{{ vault_vm_cloud_user | default('root') }}"
+iw_vm_cloud_init_password: "{{ vault_vm_cloud_password | default('') }}"
+iw_vm_ssh_keys: "{{ vault_vm_ssh_keys | default([]) }}"
+# Password is added by roles/iw_provision only when iw_vm_cloud_init_password is set.
+iw_vm_cloud_init:
+  user: "{{ iw_vm_cloud_user }}"
+  hostname: "{{ iw_vm_name }}"
+  ssh_keys: "{{ iw_vm_ssh_keys }}"
+
+# SSH key used by the control node to reach the guest (path on the control node).
+iw_vm_ssh_key_file: "{{ vault_vm_ssh_key_file | default('') }}"
+
+# Where the provisioning role caches the discovered guest address for re-runs.
+iw_generated_inventory: "{{ inventory_dir }}/generated.yml"
+iw_vm_skip_provision: false
+
+# ---------------------------------------------------------------------------
+# Target OS / IceWarp install
+# ---------------------------------------------------------------------------
+iw_distro: RHEL9_x64
+iw_install_dir: /opt/icewarp
+iw_run_as_user: icewarp
+iw_config_dir: "{{ iw_install_dir }}/config"
+iw_tool_cmd: "{{ iw_install_dir }}/tool.sh"
+iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
+iw_log_dir: /var/log/iw
+iw_download_dir: /var/tmp/iw-install
+iw_nfr_license: NFR20180412-122638-52703
+
+# Default mail/archive paths (local storage on the single node).
+iw_storage_paths:
+  mail: /var/icewarp/mail
+  archive: /var/icewarp/archive
+  smtpqueue: /var/icewarp/smtpqueue
+  logs: /var/icewarp/logs
+
+# ---------------------------------------------------------------------------
+# IceWarp versions to install
+# ---------------------------------------------------------------------------
+iw_version_143: "14.3.0.12"
+iw_version_144: "14.4.0.0_20261012"
+iw_version_143_url: "https://icewarp.onice.io/inst/IceWarpServer-14.3.0.12_RHEL9_x64.tar.gz"
+iw_version_144_url: "https://icewarp.onice.io/inst/IceWarpServer-14.4.0.0_20261012_RHEL9_x64_2775.tar.gz"
+# Optional sha256 pins; empty means "do not verify the checksum".
+iw_pkg_sha256_143: ""
+iw_pkg_sha256_144: ""
+
+# ---------------------------------------------------------------------------
+# MySQL / Percona Server 8.0 (see roles/mysql_fastload)
+# ---------------------------------------------------------------------------
+mysql_service_name: mysqld
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_charset: utf8mb4
+mysql_collation: utf8mb4_general_ci
+mysql_datadir: /var/lib/mysql
+mysql_socket: /var/lib/mysql/mysql.sock
+mysql_cnf_path: /etc/my.cnf
+mysql_conf_dropin_dir: /etc/my.cnf.d
+mysql_defaults_file: /root/.my.cnf
+mysql_bin: mysql
+mysql_root_password: "{{ vault_mysql_root_password | default('iwrootpass') }}"
+mysql_iw_user: iwdb
+mysql_iw_password: "{{ vault_mysql_iw_password | default('iwdbpass') }}"
+mysql_buffer_pool_size: 96G
+mysql_max_allowed_packet: 1G
+
+# IceWarp logical databases created empty on the test VM (used as fallbacks when
+# a production dump for that component is absent).
+iw_db_names:
+  accounts: acc
+  antispam: asp
+  groupware: grw
+  webclient: wc
+  eas: eas
+  dircache: dc
+
+# Fast-import tuning applied only around the restore window, then reverted
+# before the upgrade so ALTER timings are realistic. Affects the whole instance.
+iw_fastload_enabled: true
+iw_fastload_dropin: "{{ mysql_conf_dropin_dir }}/zz-iw-fastload.cnf"
+
+# ---------------------------------------------------------------------------
+# iwmon2 (service/account validation)
+# ---------------------------------------------------------------------------
+iwmon2_url: "https://icewarp.onice.io/inst/iwmon2_v2025_0929_121539"
+iwmon2_dir: /opt/iwmon2
+iwmon2_prom_port: 9091
+iwmon2_zabbix_host: 127.0.0.1
+iwmon2_zabbix_port: 10051
+# Optional explicit monitored-account list. The stock 2025_0929 build may not
+# accept one; leave empty to emit only `testmail`/`globaladmin` (stock schema).
+iwmon2_monitored_accounts: []
+iwmon2_testmail: ""
+
+# ---------------------------------------------------------------------------
+# Production transfer (behind confirm_prod_transfer)
+# ---------------------------------------------------------------------------
+confirm_prod_transfer: false
+prod_ssh_host: "{{ vault_prod_ssh_host | default('CHANGE_ME') }}"
+prod_ssh_user: "{{ vault_prod_ssh_user | default('root') }}"
+# Private key material or a control-node path (see vault.yml.example).
+prod_ssh_private_key_file: "{{ vault_prod_ssh_private_key_file | default('') }}"
+prod_ssh_private_key: >-
+  {{ (lookup('file', vault_prod_ssh_private_key_file)
+      if (vault_prod_ssh_private_key_file | default('') | length > 0)
+      else (vault_prod_ssh_private_key | default(''))) }}
+prod_backup_dir: "{{ vault_prod_backup_dir | default('/mnt/data/backup') }}"
+prod_backup_glob: "bck_db_*.sql.gz"
+
+# The guest egress NATs to the hypervisor public IP, so prod must permit that
+# source; the rule is tagged and removed by iw_restore in an always block.
+prod_access_source: "185.138.220.201"
+prod_firewall_comment: iw-upgrade-test
+prod_firewall_backend: auto   # auto | iptables | firewalld
+prod_local_dir: /var/tmp/iwbackup
+prod_ssh_key_on_target: /root/.ssh/iw_prod_key
+
+# Optional explicit db-name override per component type (acc/asp/grw/dc/eas/wc)
+# when the backup filename does not carry the production db name.
+prod_db_names_override: {}
+
+# ---------------------------------------------------------------------------
+# Upgrade timing capture
+# ---------------------------------------------------------------------------
+iw_upgrade_settle_timeout_sec: 3600
+iw_upgrade_quiet_sec: 120
+iw_upgrade_extra_wait_sec: 30
+
+# ---------------------------------------------------------------------------
+# Firewall (guest)
+# ---------------------------------------------------------------------------
+iw_firewall_ports:
+  - 25
+  - 465
+  - 587
+  - 110
+  - 143
+  - 993
+  - 995
+  - 80
+  - 443
+  - 5222
+  - 5223
+  - 5229
+  - 3030

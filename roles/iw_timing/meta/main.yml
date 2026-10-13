@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_timing
+  author: iw-wm-db-upgrade-test
+  description: Parse the captured ALTER timings and render the upgrade benchmark report.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

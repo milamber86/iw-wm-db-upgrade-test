@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_upgrade
+  author: iw-wm-db-upgrade-test
+  description: Run the unattended IceWarp 14.4 installer over 14.3 while capturing schema ALTER timings from the MySQL slow log.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

@@ -1,0 +1,104 @@
+---
+- name: Ensure the mysql group exists
+  ansible.builtin.group:
+    name: mysql
+    state: present
+
+- name: Create the mysql system user
+  ansible.builtin.user:
+    name: mysql
+    comment: mysql
+    group: mysql
+    shell: /usr/sbin/nologin
+    create_home: false
+  become: true
+
+- name: Check whether the MySQL data directory is already initialized
+  ansible.builtin.stat:
+    path: "{{ mysql_datadir }}/mysql"
+  register: mysql_initialized
+  become: true
+
+- name: Remove legacy MySQL data before first install
+  ansible.builtin.shell: "rm -rf {{ mysql_datadir }}/*"
+  when: not mysql_initialized.stat.exists
+  changed_when: true
+  failed_when: false
+  become: true
+
+- name: Ensure datadir ownership
+  ansible.builtin.file:
+    path: "{{ mysql_datadir }}"
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: "0744"
+  become: true
+
+# Written BEFORE the server package is installed so the datadir is initialized
+# with lower_case_table_names=1 (required by IceWarp, immutable afterwards).
+- name: Place /etc/my.cnf before first start
+  ansible.builtin.template:
+    src: my.cnf.j2
+    dest: "{{ mysql_cnf_path }}"
+    owner: mysql
+    group: mysql
+    mode: "0644"
+  become: true
+
+- name: Install Percona Server, Percona Toolkit and jemalloc
+  ansible.builtin.dnf:
+    name:
+      - percona-server-server
+      - percona-toolkit
+      - jemalloc
+    state: present
+
+- name: Get the jemalloc library path
+  ansible.builtin.shell: ls -1 /usr/lib64/libjemalloc.so.*
+  register: jemalloc_path
+  changed_when: false
+
+- name: Create the mysqld systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/mysqld.service.d/
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Enable jemalloc and OOM tuning in the mysqld service
+  ansible.builtin.template:
+    src: mysqld.service.j2
+    dest: /etc/systemd/system/mysqld.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Create /var/log/mysql
+  ansible.builtin.file:
+    path: /var/log/mysql
+    state: directory
+    owner: mysql
+    group: mysql
+    recurse: true
+  become: true
+
+- name: Create the disable-THP unit
+  ansible.builtin.template:
+    src: disable-thp.service.j2
+    dest: /usr/lib/systemd/system/disable-thp.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Enable and start disable-THP
+  ansible.builtin.systemd:
+    name: disable-thp
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true

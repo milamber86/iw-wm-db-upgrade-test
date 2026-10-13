@@ -1,0 +1,47 @@
+---
+- name: Remove conflicting MySQL/MariaDB packages
+  ansible.builtin.shell: dnf -y remove 'mariadb*' 'MariaDB*' 'mysql*' 'MySQL*' || true
+  changed_when: false
+  failed_when: false
+
+- name: Ensure python3 and pip are installed
+  ansible.builtin.dnf:
+    name:
+      - python3
+      - python3-pip
+    state: present
+
+- name: Install PyMySQL and cryptography (client-side helpers)
+  ansible.builtin.pip:
+    name:
+      - PyMySQL
+      - cryptography
+    state: present
+
+- name: Import the Percona GPG key
+  ansible.builtin.rpm_key:
+    state: present
+    key: https://raw.githubusercontent.com/percona/percona-repositories/refs/heads/main/rpm/RPM-GPG-KEY-Percona
+
+- name: Install the Percona release repository package
+  ansible.builtin.dnf:
+    name: "https://repo.percona.com/percona/yum/release/percona-release-latest.noarch.rpm"
+    state: present
+    disable_gpg_check: true
+
+- name: Install the percona-release CLI
+  ansible.builtin.dnf:
+    name: "https://repo.percona.com/yum/percona-release-latest.noarch.rpm"
+    state: present
+    disable_gpg_check: true
+
+- name: Enable the Percona Server 8.0 repository
+  ansible.builtin.command: percona-release setup -y ps80 release
+  register: mysql_ps80_repo
+  changed_when: true
+  failed_when: mysql_ps80_repo.rc != 0
+
+- name: Enable the Percona Toolkit repository
+  ansible.builtin.command: percona-release enable pt release
+  changed_when: true
+  failed_when: false

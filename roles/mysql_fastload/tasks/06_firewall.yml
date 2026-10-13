@@ -1,0 +1,25 @@
+---
+- name: Check whether firewalld is active
+  ansible.builtin.command: systemctl is-active firewalld
+  register: mysql_fw_active
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Allow MySQL from the management network
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--add-rich-rule=rule family=\"ipv4\" source address=\"172.16.5.0/24\" port port=\"{{ mysql_port }}\" protocol=\"tcp\" accept"
+  changed_when: false
+  failed_when: false
+  become: true
+  when: (mysql_fw_active.stdout | default('')) == 'active'
+
+- name: Reload firewalld after MySQL rule
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+  failed_when: false
+  become: true
+  when: (mysql_fw_active.stdout | default('')) == 'active'

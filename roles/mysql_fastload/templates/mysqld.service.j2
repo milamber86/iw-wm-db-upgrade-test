@@ -1,0 +1,6 @@
+[Service]
+### Use jemalloc
+Environment= "LD_PRELOAD={{ jemalloc_path.stdout }}"
+
+### Adjust OOM score
+OOMScoreAdjust=-800

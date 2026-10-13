@@ -1,0 +1,55 @@
+---
+# Pull the newest production IceWarp `.sql.gz` dumps over an ephemeral SSH
+# firewall exception, import them into the local Percona instance and point
+# IceWarp at the restored databases.
+
+# Inventory host name (under group `prod`) that the delegated firewall tasks run
+# against. The dump transfer itself runs on the guest.
+prod_host: prod
+
+# Production backup source (secrets come from the vault via group_vars).
+prod_ssh_host: CHANGE_ME
+prod_ssh_user: root
+prod_ssh_private_key_file: ""
+prod_ssh_private_key: ""
+prod_backup_dir: /mnt/data/backup
+prod_backup_glob: "bck_db_*.sql.gz"
+prod_db_names_override: {}
+
+# Ephemeral firewall exception added on prod and removed in an always block.
+prod_access_source: "185.138.220.201"
+prod_firewall_comment: iw-upgrade-test
+prod_firewall_backend: auto   # auto | iptables | firewalld
+
+# Guest-side staging.
+prod_local_dir: /var/tmp/iwbackup
+prod_ssh_key_on_target: /root/.ssh/iw_prod_key
+iw_restore_import_timeout_sec: 7200
+iw_restore_poll_sec: 30
+
+# Confirm the production transfer explicitly.
+confirm_prod_transfer: false
+
+mysql_bin: mysql
+mysql_defaults_file: /root/.my.cnf
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_charset: utf8mb4
+mysql_collation: utf8mb4_general_ci
+mysql_iw_user: iwdb
+mysql_iw_password: iwdbpass
+
+iw_install_dir: /opt/icewarp
+iw_config_dir: "{{ iw_install_dir }}/config"
+iw_tool_cmd: "{{ iw_install_dir }}/tool.sh"
+iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
+
+iw_db_names:
+  accounts: acc
+  antispam: asp
+  groupware: grw
+  webclient: wc
+  eas: eas
+  dircache: dc
+
+iw_fastload_enabled: true

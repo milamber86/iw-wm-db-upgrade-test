@@ -1,0 +1,56 @@
+---
+# Remove the fast-import drop-in and restart mysqld so the 14.4 upgrade runs on
+# a normal, durable instance (realistic ALTER timings).
+
+- name: Stat the fast-load drop-in
+  ansible.builtin.stat:
+    path: "{{ iw_fastload_dropin }}"
+  register: iw_fastload_revert_stat
+  become: true
+
+- name: Request a fast shutdown for the revert restart
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - SET GLOBAL innodb_fast_shutdown=2
+  when: iw_fastload_revert_stat.stat.exists | default(false)
+  failed_when: false
+  changed_when: false
+
+- name: Remove the fast-load drop-in
+  ansible.builtin.file:
+    path: "{{ iw_fastload_dropin }}"
+    state: absent
+  become: true
+  when: iw_fastload_revert_stat.stat.exists | default(false)
+
+- name: Restart mysqld to restore durability settings
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name }}"
+    state: restarted
+  become: true
+  when: iw_fastload_revert_stat.stat.exists | default(false)
+
+- name: Wait for mysqld after fast-load revert
+  ansible.builtin.include_tasks: wait_mysqld.yml
+  when: iw_fastload_revert_stat.stat.exists | default(false)
+
+- name: Record post-revert durability settings
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - --batch
+      - --raw
+      - --skip-column-names
+      - -e
+      - SELECT @@GLOBAL.log_bin, @@GLOBAL.innodb_doublewrite
+  register: iw_fastload_revert_after
+  changed_when: false
+  failed_when: false
+
+- name: Report post-revert durability settings
+  ansible.builtin.debug:
+    msg: "log_bin/innodb_doublewrite after revert: {{ iw_fastload_revert_after.stdout | default('n/a') }}"

@@ -1,0 +1,10 @@
+# Temporary IceWarp restore fast-import shortcut. Removed after the restore,
+# before the 14.4 upgrade, so ALTER timings are measured on a normal instance.
+# Affects the WHOLE MySQL instance. Never enable skip-log-bin on a primary with
+# async replicas.
+[mysqld]
+skip-log-bin
+innodb_doublewrite=OFF
+innodb_flush_log_at_trx_commit=0
+sync_binlog=0
+innodb_buffer_pool_size=96G

@@ -1,0 +1,249 @@
+---
+# Run the unattended 14.4 installer over the restored 14.3 install, capturing
+# every schema ALTER IceWarp issues via the MySQL slow log (log_output=TABLE,
+# log_slow_admin_statements=ON, long_query_time=0).
+
+- name: Ensure the log directory exists
+  ansible.builtin.file:
+    path: "{{ iw_log_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Resolve the databases to size
+  ansible.builtin.set_fact:
+    iw_upgrade_db_list: >-
+      {{ iw_storage_db.values() | list if (iw_storage_db is defined and iw_storage_db)
+         else (iw_db_names.values() | list) }}
+
+- name: Assert the databases to size are safe identifiers
+  ansible.builtin.assert:
+    that:
+      - item is match('^[A-Za-z0-9_]+$')
+    fail_msg: "Unsafe database name: {{ item }}"
+  loop: "{{ iw_upgrade_db_list }}"
+
+- name: Build the database list literal
+  ansible.builtin.set_fact:
+    iw_upgrade_db_literal: "'{{ iw_upgrade_db_list | join(\"','\") }}'"
+
+- name: Record the pre-upgrade IceWarp version
+  ansible.builtin.command:
+    argv: [sh, "{{ iw_tool_cmd }}", display, system, c_version]
+  register: iw_upgrade_version_before_raw
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Snapshot pre-upgrade database table counts and sizes
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -N
+      - -e
+      - >-
+        SELECT table_schema, COUNT(*),
+        SUM(IFNULL(data_length,0)+IFNULL(index_length,0))
+        FROM information_schema.tables
+        WHERE table_schema IN ({{ iw_upgrade_db_literal }})
+        GROUP BY table_schema
+  register: iw_upgrade_pre_tables_raw
+  changed_when: false
+  become: true
+
+- name: Store the pre-upgrade snapshot
+  ansible.builtin.set_fact:
+    iw_upgrade_version_before: "{{ iw_upgrade_version_before_raw.stdout | default('') | trim }}"
+    iw_upgrade_pre_tables: >-
+      {%- set out = {} -%}
+      {%- for line in iw_upgrade_pre_tables_raw.stdout_lines | default([]) -%}
+        {%- set p = line.split('\t') -%}
+        {%- if p | length >= 3 -%}
+          {%- set _ = out.update({p[0]: {'tables': p[1] | int, 'bytes': p[2] | int}}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Enable the MySQL slow log for schema-DDL capture
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -N
+      - -e
+      - >-
+        SET GLOBAL log_output='TABLE';
+        SET GLOBAL long_query_time=0;
+        SET GLOBAL log_slow_admin_statements=ON;
+        SET GLOBAL slow_query_log=OFF;
+        TRUNCATE TABLE mysql.slow_log;
+        SET GLOBAL slow_query_log=ON;
+        SELECT NOW(6)
+  register: iw_upgrade_slowlog_enable
+  changed_when: false
+  become: true
+
+- name: Enable extended slow-log detail when supported
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - SET GLOBAL log_slow_extra=ON
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Record the capture start timestamp
+  ansible.builtin.set_fact:
+    iw_upgrade_t0: "{{ iw_upgrade_slowlog_enable.stdout_lines | default([]) | select('length') | list | last | default('') | trim }}"
+
+- name: Fail when the capture window start was not recorded
+  ansible.builtin.assert:
+    that:
+      - iw_upgrade_t0 | length > 0
+    fail_msg: "Could not read NOW(6) after enabling the slow log."
+
+- name: Record wall-clock start of the upgrade install
+  ansible.builtin.command: date +%s
+  register: iw_upgrade_ts_start
+  changed_when: false
+
+- name: Stop IceWarp before the upgrade
+  ansible.builtin.command: "{{ iw_icewarpd }} --stop all"
+  changed_when: true
+  failed_when: false
+  become: true
+
+- name: Run the 14.4 installer over the existing install
+  ansible.builtin.include_role:
+    name: iw_install
+  vars:
+    iw_install_url: "{{ iw_version_144_url }}"
+    iw_install_version_id: "{{ iw_version_144 }}"
+    iw_install_sha256: "{{ iw_pkg_sha256_144 }}"
+    iw_install_patch_guards: true
+    iw_install_apply_license: false
+    iw_install_start_services: false
+    iw_install_tee_log: true
+    iw_install_log_name: "upgrade-14.4.log"
+
+- name: Record wall-clock end of the upgrade install
+  ansible.builtin.command: date +%s
+  register: iw_upgrade_ts_end
+  changed_when: false
+
+- name: Start IceWarp so the 14.4 schema migration runs
+  ansible.builtin.command: "{{ iw_icewarpd }} --restart all"
+  changed_when: true
+  failed_when: false
+  become: true
+
+- name: Allow the server to warm up before quiet detection
+  ansible.builtin.pause:
+    seconds: "{{ iw_upgrade_warmup_sec | int }}"
+
+- name: Wait until IceWarp stops issuing schema ALTERs
+  ansible.builtin.shell: |
+    set -e
+    Q="SELECT COUNT(*) FROM mysql.slow_log WHERE start_time >= '{{ iw_upgrade_t0 }}' AND sql_text LIKE 'ALTER TABLE%'"
+    prev=-1
+    stable=0
+    deadline=$(( $(date +%s) + {{ iw_upgrade_settle_timeout_sec | int }} ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      cur=$({{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }} -N -e "$Q")
+      if [ "$cur" = "$prev" ]; then
+        stable=$((stable + 1))
+      else
+        stable=0
+        prev=$cur
+      fi
+      if [ "$stable" -ge {{ (iw_upgrade_quiet_sec | int) // 10 }} ]; then
+        echo "$cur"
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "$prev"
+  args:
+    executable: /bin/bash
+  register: iw_upgrade_settle
+  changed_when: false
+  become: true
+
+- name: Wait an extra grace period for late schema work
+  ansible.builtin.pause:
+    seconds: "{{ iw_upgrade_extra_wait_sec | int }}"
+
+- name: Record the capture end timestamp and disable the slow log
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -N
+      - -e
+      - SET GLOBAL slow_query_log=OFF; SELECT NOW(6)
+  register: iw_upgrade_slowlog_disable
+  changed_when: false
+  become: true
+
+- name: Store the capture end timestamp
+  ansible.builtin.set_fact:
+    iw_upgrade_t1: "{{ iw_upgrade_slowlog_disable.stdout_lines | default([]) | select('length') | list | last | default('') | trim }}"
+    iw_upgrade_alter_count: "{{ iw_upgrade_settle.stdout | default('0') | trim }}"
+    iw_upgrade_install_seconds: "{{ (iw_upgrade_ts_end.stdout | default('0') | int) - (iw_upgrade_ts_start.stdout | default('0') | int) }}"
+
+- name: Record the post-upgrade IceWarp version
+  ansible.builtin.command:
+    argv: [sh, "{{ iw_tool_cmd }}", display, system, c_version]
+  register: iw_upgrade_version_after_raw
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Snapshot post-upgrade database table counts and sizes
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -N
+      - -e
+      - >-
+        SELECT table_schema, COUNT(*),
+        SUM(IFNULL(data_length,0)+IFNULL(index_length,0))
+        FROM information_schema.tables
+        WHERE table_schema IN ({{ iw_upgrade_db_literal }})
+        GROUP BY table_schema
+  register: iw_upgrade_post_tables_raw
+  changed_when: false
+  become: true
+
+- name: Store the post-upgrade snapshot and versions
+  ansible.builtin.set_fact:
+    iw_upgrade_version_after: "{{ iw_upgrade_version_after_raw.stdout | default('') | trim }}"
+    iw_upgrade_post_tables: >-
+      {%- set out = {} -%}
+      {%- for line in iw_upgrade_post_tables_raw.stdout_lines | default([]) -%}
+        {%- set p = line.split('\t') -%}
+        {%- if p | length >= 3 -%}
+          {%- set _ = out.update({p[0]: {'tables': p[1] | int, 'bytes': p[2] | int}}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Verify the reported version is 14.4
+  ansible.builtin.assert:
+    that:
+      - "'14.4' in (iw_upgrade_version_after | string)"
+    fail_msg: >-
+      IceWarp reports version '{{ iw_upgrade_version_after }}' after the upgrade;
+      expected 14.4. See {{ iw_log_dir }}/upgrade-14.4.log.
+
+- name: Report the upgrade summary
+  ansible.builtin.debug:
+    msg:
+      - "Version: {{ iw_upgrade_version_before }} -> {{ iw_upgrade_version_after }}"
+      - "Installer wall clock: {{ iw_upgrade_install_seconds }} s"
+      - "Schema ALTERs captured: {{ iw_upgrade_alter_count }}"
+      - "Capture window: {{ iw_upgrade_t0 }} .. {{ iw_upgrade_t1 }}"

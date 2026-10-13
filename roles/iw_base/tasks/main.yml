@@ -1,0 +1,100 @@
+---
+- name: Set the guest hostname
+  ansible.builtin.hostname:
+    name: "{{ iw_base_hostname }}"
+  become: "{{ iw_base_become }}"
+
+- name: Ensure the guest hostname resolves locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ iw_base_hostname | regex_escape }}\s*$'
+    line: "127.0.1.1 {{ iw_base_hostname }}"
+    state: present
+  become: "{{ iw_base_become }}"
+
+- name: Set the timezone
+  ansible.builtin.command:
+    argv: [timedatectl, set-timezone, "{{ iw_base_timezone }}"]
+  changed_when: false
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Install base OS packages
+  ansible.builtin.dnf:
+    name: "{{ iw_base_packages }}"
+    state: present
+  become: "{{ iw_base_become }}"
+
+- name: Raise TCP listen/SYN backlog for IceWarp
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-iw-upgrade.conf
+    mode: "0644"
+    content: |
+      # IceWarp upgrade test bed.
+      net.core.somaxconn = 4096
+      net.ipv4.tcp_max_syn_backlog = 8192
+      vm.swappiness = 10
+  become: "{{ iw_base_become }}"
+  register: iw_base_sysctl
+
+- name: Apply sysctl settings
+  ansible.builtin.command: sysctl --system
+  changed_when: iw_base_sysctl is changed
+  become: "{{ iw_base_become }}"
+
+- name: Put SELinux in permissive mode (config)
+  ansible.builtin.lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: 'SELINUX=permissive'
+    state: present
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Put SELinux in permissive mode (runtime)
+  ansible.builtin.command: setenforce 0
+  changed_when: false
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Ensure IceWarp storage directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+    mode: "0755"
+  loop: "{{ iw_storage_paths.values() | list if iw_storage_paths is mapping else iw_storage_paths }}"
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Start and enable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Check whether firewalld is active
+  ansible.builtin.command: systemctl is-active firewalld
+  register: iw_base_fw_active
+  changed_when: false
+  become: "{{ iw_base_become }}"
+  failed_when: false
+
+- name: Open IceWarp service ports
+  ansible.builtin.command:
+    argv: [firewall-cmd, --permanent, "--add-port={{ item }}/tcp"]
+  loop: "{{ iw_firewall_ports }}"
+  changed_when: false
+  become: "{{ iw_base_become }}"
+  failed_when: false
+  when: (iw_base_fw_active.stdout | default('')) == 'active'
+
+- name: Reload firewalld after port changes
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+  become: "{{ iw_base_become }}"
+  failed_when: false
+  when: (iw_base_fw_active.stdout | default('')) == 'active'

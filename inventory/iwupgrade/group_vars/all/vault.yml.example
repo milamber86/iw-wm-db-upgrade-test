@@ -1,0 +1,37 @@
+---
+# Copy to inventory/iwupgrade/group_vars/all/vault.yml, fill in, then encrypt:
+#
+#   cp inventory/iwupgrade/group_vars/all/vault.yml.example \
+#      inventory/iwupgrade/group_vars/all/vault.yml
+#   $EDITOR inventory/iwupgrade/group_vars/all/vault.yml
+#   ansible-vault encrypt inventory/iwupgrade/group_vars/all/vault.yml
+#
+# Run with: ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml --ask-vault-pass
+#
+# Every key below has a non-secret default in group_vars/all.yml, so the
+# playbook can start without a vault file; fill the vault before a real run.
+
+# --- guest cloud-init / SSH -------------------------------------------------
+# Non-root user created by cloud-init (must match an account you can log in as).
+vault_vm_cloud_user: root
+# Optional cloud-init password (used when the template is not a cloud-init image
+# and you must fall back to a documented existing login).
+vault_vm_cloud_password: ""
+vault_vm_ssh_keys:
+  - "ssh-ed25519 AAAA... replace-me@host"
+# Control-node private key used to reach the guest.
+vault_vm_ssh_key_file: ""
+
+# --- MySQL ------------------------------------------------------------------
+vault_mysql_root_password: change-me-root
+vault_mysql_iw_password: change-me-iwdb
+
+# --- production backup host -------------------------------------------------
+vault_prod_ssh_host: prod.example.com
+vault_prod_ssh_user: root
+# Either a control-node key path...
+vault_prod_ssh_private_key_file: ""
+# ...or inline key material.
+vault_prod_ssh_private_key: ""
+# Directory that holds the `bck_db_*.sql.gz` dumps (defaults to /mnt/data/backup).
+vault_prod_backup_dir: /mnt/data/backup

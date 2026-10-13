@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_validate
+  author: iw-wm-db-upgrade-test
+  description: Validate the restored IceWarp data and deploy/refresh iwmon2 with accounts derived from tool.sh.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

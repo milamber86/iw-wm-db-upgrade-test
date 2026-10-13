@@ -1,0 +1,49 @@
+---
+- name: Render the IceWarp database bootstrap SQL
+  ansible.builtin.copy:
+    dest: /root/.iw-db-bootstrap.sql
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {% for db in iw_db_names.values() | list %}
+      CREATE DATABASE IF NOT EXISTS `{{ db }}` CHARACTER SET {{ mysql_charset }} COLLATE {{ mysql_collation }};
+      {% endfor %}
+      CREATE USER IF NOT EXISTS '{{ mysql_iw_user }}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      CREATE USER IF NOT EXISTS '{{ mysql_iw_user }}'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      {% for db in iw_db_names.values() | list %}
+      GRANT ALL PRIVILEGES ON `{{ db }}`.* TO '{{ mysql_iw_user }}'@'localhost';
+      GRANT ALL PRIVILEGES ON `{{ db }}`.* TO '{{ mysql_iw_user }}'@'127.0.0.1';
+      {% endfor %}
+      FLUSH PRIVILEGES;
+  become: true
+  no_log: true
+
+- name: Apply the IceWarp database bootstrap SQL
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }}
+    < /root/.iw-db-bootstrap.sql
+  become: true
+  no_log: true
+  changed_when: false
+
+- name: Remove the bootstrap SQL
+  ansible.builtin.file:
+    path: /root/.iw-db-bootstrap.sql
+    state: absent
+  become: true
+
+- name: List the created databases
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -N
+      - -e
+      - SHOW DATABASES
+  register: mysql_db_list
+  changed_when: false
+
+- name: Show the database list
+  ansible.builtin.debug:
+    msg: "{{ mysql_db_list.stdout_lines }}"

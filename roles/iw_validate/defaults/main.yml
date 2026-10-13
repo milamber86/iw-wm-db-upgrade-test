@@ -1,0 +1,17 @@
+---
+iw_install_dir: /opt/icewarp
+iw_tool_cmd: "{{ iw_install_dir }}/tool.sh"
+iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
+iw_log_dir: /var/log/iw
+iw_run_as_user: icewarp
+
+iwmon2_url: "https://icewarp.onice.io/inst/iwmon2_v2025_0929_121539"
+iwmon2_dir: /opt/iwmon2
+iwmon2_prom_port: 9091
+iwmon2_zabbix_host: 127.0.0.1
+iwmon2_zabbix_port: 10051
+iwmon2_testmail: ""
+iwmon2_monitored_accounts: []
+
+iwmon2_wait_retries: 60
+iwmon2_wait_delay_sec: 10

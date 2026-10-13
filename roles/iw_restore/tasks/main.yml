@@ -1,0 +1,20 @@
+---
+- name: Require explicit confirmation for the production transfer
+  ansible.builtin.assert:
+    that:
+      - confirm_prod_transfer | bool
+    fail_msg: >-
+      confirm_prod_transfer is false. This role copies production database dumps
+      and opens a temporary SSH exception on the production host. Re-run with
+      -e confirm_prod_transfer=true once you have reviewed the target.
+
+- name: Restore production dumps behind an ephemeral firewall exception
+  block:
+    - name: Add the ephemeral production SSH exception
+      ansible.builtin.include_tasks: prod_firewall_add.yml
+
+    - name: Pull, import and remap production databases
+      ansible.builtin.include_tasks: restore_databases.yml
+  always:
+    - name: Remove the ephemeral production SSH exception
+      ansible.builtin.include_tasks: prod_firewall_remove.yml

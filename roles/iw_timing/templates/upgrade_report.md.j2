@@ -1,0 +1,95 @@
+{% macro human_seconds(s) -%}
+{%- set s = (s | default(0) | float) -%}
+{%- if s < 1 -%}
+{{ '%0.0f' | format(s * 1000) }} ms
+{%- elif s < 60 -%}
+{{ '%0.2f' | format(s) }} s
+{%- elif s < 3600 -%}
+{{ '%d' | format((s // 60) | int) }}m {{ '%0.1f' | format(s % 60) }}s
+{%- else -%}
+{{ '%d' | format((s // 3600) | int) }}h {{ '%d' | format(((s % 3600) // 60) | int) }}m
+{%- endif -%}
+{%- endmacro %}
+{% macro human_bytes(n) -%}
+{%- set n = (n | default(0) | int) -%}
+{%- if n >= 1073741824 -%}
+{{ '%0.2f' | format(n / 1073741824) }} GiB
+{%- elif n >= 1048576 -%}
+{{ '%0.2f' | format(n / 1048576) }} MiB
+{%- elif n >= 1024 -%}
+{{ '%0.1f' | format(n / 1024) }} KiB
+{%- else -%}
+{{ n }} B
+{%- endif -%}
+{%- endmacro %}
+{% set r = iw_timing_report | default({}) %}
+{% set u = r.upgrade | default({}) %}
+{% set t = r.timing | default({}) %}
+{% set pre = r.pre_tables | default({}) %}
+{% set post = r.post_tables | default({}) %}
+# IceWarp 14.3 -> 14.4 upgrade benchmark
+
+Generated: `{{ r.generated_at | default('n/a') }}` on `{{ r.host | default('n/a') }}`.
+
+This report times the schema `ALTER`s IceWarp itself runs during the unattended
+14.3 -> 14.4 upgrade. The statements are captured by MySQL's slow log
+(`log_output=TABLE`, `log_slow_admin_statements=ON`, `long_query_time=0`) over
+the capture window below; install wall-clock time is measured separately.
+
+## Upgrade summary
+
+| Item | Value |
+|------|-------|
+| Version before | {{ u.version_before | default('n/a') }} |
+| Version after | {{ u.version_after | default('n/a') }} |
+| Installer wall clock | {{ human_seconds(u.install_seconds) }} ({{ u.install_seconds | default(0) }} s) |
+| Schema ALTERs captured | {{ t.count | default(0) }} |
+| Total ALTER time | {{ human_seconds(t.total_seconds) }} ({{ t.total_seconds | default(0) }} s) |
+| Slowest ALTER | {{ human_seconds(t.max_seconds) }} |
+| Fastest ALTER | {{ human_seconds(t.min_seconds) }} |
+| Mean ALTER | {{ human_seconds(t.avg_seconds) }} |
+| Capture window | `{{ u.window_start | default('n/a') }}` .. `{{ u.window_end | default('n/a') }}` |
+
+## Database size before / after
+
+| Database | Tables before | Tables after | Bytes before | Bytes after | Growth |
+|----------|---------------|--------------|--------------|-------------|--------|
+{% for db in ((pre.keys() | list) + (post.keys() | list)) | unique | sort %}
+| `{{ db }}` | {{ (pre[db] | default({})).tables | default(0) }} | {{ (post[db] | default({})).tables | default(0) }} | {{ human_bytes((pre[db] | default({})).bytes | default(0)) }} | {{ human_bytes((post[db] | default({})).bytes | default(0)) }} | {{ human_bytes(((post[db] | default({})).bytes | default(0) | int) - ((pre[db] | default({})).bytes | default(0) | int)) }} |
+{% endfor %}
+
+## Per-ALTER timings
+
+{% if (t.statements | default([])) | length == 0 %}
+_No `ALTER TABLE` statements were captured in the window._
+{% else %}
+| # | Table | Start | Duration |
+|---|-------|-------|----------|
+{% for st in t.statements | default([]) %}
+| {{ loop.index }} | `{{ st.table | default('(unknown)') }}` | {{ st.start_time }} | {{ human_seconds(st.duration_sec) }} |
+{% endfor %}
+{% endif %}
+
+## Time by table
+
+{% if (t.by_table | default([])) | length == 0 %}
+_No per-table aggregation available._
+{% else %}
+| Table | ALTERs | Total | Slowest |
+|-------|--------|-------|---------|
+{% for row in t.by_table | default([]) %}
+| `{{ row.table }}` | {{ row.count }} | {{ human_seconds(row.total_seconds) }} | {{ human_seconds(row.max_seconds) }} |
+{% endfor %}
+{% endif %}
+
+## Notes
+
+- The 14.4 schema changes are issued by IceWarp (installer and first service
+  start); they cannot be wrapped by `scripts/timed_sql.py`. `scripts/timed_sql.py`
+  remains available for measured, self-issued `ALTER`s (for example a
+  `pt-online-schema-change` comparison on the restored data).
+- `iwmon2` config is regenerated from the restored account list; see
+  `/var/log/iw/accounts.txt` on the guest.
+- Raw slow-log rows: `/var/log/iw/slow_log_alters.tsv`; parsed JSON:
+  `/var/log/iw/alter_timings.json`; installer transcript:
+  `/var/log/iw/upgrade-14.4.log`.

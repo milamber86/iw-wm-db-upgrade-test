@@ -1,0 +1,13 @@
+[Unit]
+Description = IWmon V2
+
+[Service]
+Type = simple
+User = root
+Group = root
+Restart = on-failure
+Environment = IWM_LOGGER_LEVEL=info
+ExecStart = {{ iwmon2_dir }}/iwmon2 -c {{ iwmon2_dir }}/config.yml service
+
+[Install]
+WantedBy = multi-user.target

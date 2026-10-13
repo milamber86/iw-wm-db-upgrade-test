@@ -1,0 +1,54 @@
+---
+# IceWarp 14.3 -> 14.4 upgrade test bed on Infralab (AlmaLinux 9).
+#
+#   export VPSCTL_TOKEN=...
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml \
+#     --ask-vault-pass [-e confirm_prod_transfer=true]
+#
+# Plays:
+#   (a) hypervisors -> create the VM and add the guest as `iwtarget`
+#   (b) iwtarget    -> base OS + Percona MySQL 8 (fast-import) + IceWarp 14.3
+#   (c) iwtarget    -> restore production dumps (prod firewall tasks delegated)
+#   (d) iwtarget    -> validate accounts/services/iwmon2
+#   (e) iwtarget    -> run the 14.4 installer, capture ALTER timings, render report
+
+- name: Provision the IceWarp upgrade test VM
+  hosts: hypervisors
+  gather_facts: false
+  roles:
+    - role: iw_provision
+
+- name: Base OS, Percona MySQL and IceWarp 14.3
+  hosts: iwtarget
+  gather_facts: true
+  roles:
+    - role: iw_base
+    - role: mysql_fastload
+    - role: iw_install
+      vars:
+        iw_install_url: "{{ iw_version_143_url }}"
+        iw_install_version_id: "{{ iw_version_143 }}"
+        iw_install_sha256: "{{ iw_pkg_sha256_143 }}"
+        iw_install_apply_license: true
+        iw_install_start_services: true
+        iw_install_tee_log: true
+        iw_install_log_name: "install-14.3.log"
+
+- name: Restore production databases
+  hosts: iwtarget
+  gather_facts: true
+  roles:
+    - role: iw_restore
+
+- name: Validate the restored IceWarp server and iwmon2
+  hosts: iwtarget
+  gather_facts: true
+  roles:
+    - role: iw_validate
+
+- name: Upgrade 14.3 -> 14.4 and capture ALTER timings
+  hosts: iwtarget
+  gather_facts: true
+  roles:
+    - role: iw_upgrade
+    - role: iw_timing

@@ -138,3 +138,88 @@ Timed statements in `files/migration_steps.yml` match the production script: orp
 - `enable_fast_seed` (default true) restarts mysqld twice per tier with `skip-log-bin` and `innodb_doublewrite=OFF` during LOAD DATA only. Never leave this on for a primary with async replicas.
 - `enable_load_tuning` changes **global** `innodb_flush_log_at_trx_commit` and `sync_binlog` without a restart. Leave it off on shared servers. It is skipped when `enable_fast_seed` is true (those knobs are in the drop-in).
 - Default `keep_database: false` drops the test DB after metrics so later tiers (100M / 500M / 1B) can share disk.
+
+# IceWarp 14.3 -> 14.4 upgrade test bed (Infralab)
+
+The same repo also carries a repeatable, Ansible-orchestrated upgrade harness
+that provisions a 16 vCPU / 128 GB AlmaLinux 9 VM on the Infralab hypervisor,
+installs IceWarp 14.3 + Percona Server 8.0, restores the newest production
+`.sql.gz` dumps, validates accounts/services/`iwmon2`, then runs the unattended
+14.4 installer while capturing per-`ALTER` timings into
+`reports/upgrade_benchmark_*.{md,json}`.
+
+See `.kilo/plans/1791898144101-icewarp-143-144-upgrade-test.md` for the design.
+
+## Layout
+
+```
+inventory/iwupgrade/hosts.yml               hypervisors, production, iwtarget (runtime)
+inventory/iwupgrade/group_vars/all.yml      versions, tuning, VM/prod settings
+inventory/iwupgrade/group_vars/all/vault.yml.example
+playbooks/iw-provision.yml                  play 1 only (create VM + add_host)
+playbooks/iw-upgrade-site.yml               full orchestrator
+roles/iw_provision                          vps_vm wrapper + IP discovery + generated inventory
+roles/iw_base                               OS prereqs, hosts, sysctl, firewall
+roles/mysql_fastload                        Percona 8.0 + fast-import drop-in + apply/revert
+roles/iw_install                            pinned installer, guard patch, license (fresh/upgrade)
+roles/iw_restore                            prod firewall exception, scp pull, import, DB remap
+roles/iw_validate                           account export, iwmon2 config regen, probes
+roles/iw_upgrade                            slow-log capture, run 14.4 installer, settle
+roles/iw_timing                             parse ALTER rows, render the benchmark report
+scripts/parse_alter_timings.py              slow-log TSV -> timings JSON
+files/iw_my_fastload.cnf                    Percona fast-import drop-in
+templates/iwmon2_config.yml.j2              iwmon2 config, accounts from tool.sh export
+```
+
+## Prerequisites
+
+1. `VPSCTL_TOKEN` exported on the control node (vpsctl bootstrap admin token).
+2. A template (`tpl_L1_OB_almalinux9.qcow2`) and network (`br0-net`) registered in
+   vpsctl; confirm with `vpsctl template list` / `vpsctl network list`.
+3. `inventory/iwupgrade/group_vars/all/vault.yml` created from the `.example`,
+   filled with the prod SSH target/key and MySQL passwords, and encrypted.
+4. Cloud-init user/SSH key (or a documented existing login) for the guest.
+
+`ansible.cfg` `roles_path` includes the infralab-hv-orc roles so the `vps_vm`
+role resolves without copying it.
+
+## Run
+
+```bash
+export VPSCTL_TOKEN=...
+
+# Provision only (idempotent: the VM is looked up by name first)
+ansible-playbook -i inventory/iwupgrade playbooks/iw-provision.yml
+
+# Full cycle
+ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml --ask-vault-pass
+
+# Include the production restore (explicit, destructive-adjacent opt-in)
+ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml \
+  --ask-vault-pass -e confirm_prod_transfer=true
+```
+
+## Notes
+
+- **Engine:** Percona Server 8.0 (not MariaDB); `/etc/my.cnf` is written before
+  the first server start so the datadir is initialized with
+  `lower_case_table_names=1` (immutable afterwards).
+- **Fast import:** `files/iw_my_fastload.cnf` (`skip-log-bin`,
+  `innodb_doublewrite=OFF`, `innodb_flush_log_at_trx_commit=0`, `sync_binlog=0`)
+  is applied only around the restore and reverted before the upgrade so ALTER
+  timings are measured on a normal instance.
+- **Prod safety:** the SSH exception is tagged `iw-upgrade-test` and removed in an
+  `always` block; the role asserts its removal. The transfer runs from the guest
+  and reaches prod NATed as `185.138.220.201`, so the rule permits that source.
+- **Missing dumps:** component types (`acc/asp/grw/dc/eas/wc`) are parsed from
+  the backup filename and absent types are skipped; the accounts (`acc`) dump is
+  required. The webclient dump is disabled in the current production backup
+  script, so `wc` is often absent and falls back to the empty local DB.
+- **ALTER capture:** the 14.4 schema changes are issued by IceWarp, so the MySQL
+  slow log is used (`log_output=TABLE`, `log_slow_admin_statements=ON`,
+  `long_query_time=0`) with a settle loop; `scripts/timed_sql.py` stays available
+  for measured, self-issued statements.
+- **iwmon2:** its config is force-regenerated (the stock deploy only re-renders
+  when the file is missing or the Prom stack is enabled) and `testmail` is
+  derived from the first restored account.
+

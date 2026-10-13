@@ -1,0 +1,190 @@
+---
+- name: Require an installer URL
+  ansible.builtin.assert:
+    that:
+      - iw_install_url | length > 0
+    fail_msg: "iw_install_url is required (e.g. iw_version_143_url)."
+
+- name: Ensure the download and log directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ iw_download_dir }}"
+    - "{{ iw_log_dir }}"
+  become: true
+
+- name: Download the IceWarp package for {{ iw_install_version_id }}
+  ansible.builtin.get_url:
+    url: "{{ iw_install_url }}"
+    dest: "{{ iw_download_dir }}/{{ iw_install_url | basename }}"
+    mode: "0644"
+    timeout: 1800
+    checksum: "{{ ('sha256:' ~ iw_install_sha256) if (iw_install_sha256 | length > 0) else omit }}"
+  register: iw_pkg_download
+  become: true
+
+- name: Extract the IceWarp package
+  ansible.builtin.unarchive:
+    src: "{{ iw_pkg_download.dest }}"
+    dest: "{{ iw_download_dir }}"
+    remote_src: true
+  become: true
+
+- name: Locate the installer script
+  ansible.builtin.find:
+    paths: "{{ iw_download_dir }}"
+    patterns: install.sh
+    recurse: true
+    file_type: file
+  register: iw_installer_find
+  become: true
+
+- name: Fail when no installer was found
+  ansible.builtin.fail:
+    msg: "install.sh not found under {{ iw_download_dir }} after extracting {{ iw_install_url }}"
+  when: iw_installer_find.matched == 0
+
+- name: Record the installer directory
+  ansible.builtin.set_fact:
+    iw_installer_dir: "{{ iw_installer_find.files[0].path | dirname }}"
+
+- name: Locate the internal _install.sh
+  ansible.builtin.find:
+    paths: "{{ iw_installer_dir }}"
+    patterns: _install.sh
+    file_type: file
+  register: iw_internal_find
+  become: true
+
+- name: Disable the clean-install guard checks
+  ansible.builtin.replace:
+    path: "{{ iw_internal_find.files[0].path }}"
+    regexp: "{{ item | regex_escape }}"
+    replace: "if false; then"
+  loop:
+    - "{{ icewarp_legacy_config_guard }}"
+    - "{{ icewarp_existing_dir_guard }}"
+  become: true
+  when:
+    - iw_install_patch_guards | bool
+    - iw_internal_find.matched > 0
+
+- name: Run the IceWarp installer in automatic mode (capturing stdout+stderr)
+  ansible.builtin.shell: |
+    set -o pipefail
+    sh ./install.sh --auto --skip-api-check --skip-ffmpeg-check \
+      --user {{ iw_run_as_user }} --install-dir {{ iw_install_dir }} --start-on-boot 1 \
+      2>&1 | tee {{ iw_log_dir }}/{{ iw_install_log_name }}
+  args:
+    chdir: "{{ iw_installer_dir }}"
+    executable: /bin/bash
+    stdin: /dev/null
+  register: iw_install_run
+  changed_when: true
+  become: true
+  when: iw_install_tee_log | bool
+
+- name: Run the IceWarp installer in automatic mode
+  ansible.builtin.command:
+    argv:
+      - sh
+      - ./install.sh
+      - --auto
+      - --skip-api-check
+      - --skip-ffmpeg-check
+      - --user
+      - "{{ iw_run_as_user }}"
+      - --install-dir
+      - "{{ iw_install_dir }}"
+      - --start-on-boot
+      - "1"
+    chdir: "{{ iw_installer_dir }}"
+    stdin: /dev/null
+  register: iw_install_run
+  changed_when: true
+  become: true
+  when: not (iw_install_tee_log | bool)
+
+- name: Assert the tool binary is present
+  ansible.builtin.stat:
+    path: "{{ iw_tool_cmd }}"
+  register: iw_tool_stat
+  become: true
+
+- name: Fail when installation did not complete
+  ansible.builtin.fail:
+    msg: >-
+      IceWarp {{ iw_tool_cmd }} is missing after installing {{ iw_install_version_id }}.
+      See {{ iw_log_dir }}/{{ iw_install_log_name }} and /root/icewarp-install-error.log.
+  when: not iw_tool_stat.stat.exists
+
+- name: Ensure the IceWarp service user has a login shell
+  ansible.builtin.user:
+    name: "{{ iw_run_as_user }}"
+    shell: /bin/bash
+  become: true
+
+- name: Create the IceWarp storage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+    mode: "0755"
+  loop: "{{ iw_storage_paths.values() | list }}"
+  become: true
+  when: iw_storage_paths | length > 0
+
+- name: Save the installer transcript (non-tee mode)
+  ansible.builtin.copy:
+    content: "{{ iw_install_run.stdout | default('') }}\n{{ iw_install_run.stderr | default('') }}"
+    dest: "{{ iw_log_dir }}/{{ iw_install_log_name }}"
+    mode: "0644"
+  become: true
+  when:
+    - not (iw_install_tee_log | bool)
+    - iw_install_run is defined
+
+- name: Activate the NFR license
+  ansible.builtin.command:
+    argv:
+      - sh
+      - "{{ iw_tool_cmd }}"
+      - set
+      - system
+      - C_OnlineLicense
+      - "{{ iw_nfr_license }}"
+  changed_when: true
+  become: true
+  when:
+    - iw_install_apply_license | bool
+    - iw_nfr_license | length > 0
+
+- name: Start IceWarp
+  ansible.builtin.command:
+    argv:
+      - "{{ iw_icewarpd }}"
+      - --restart
+      - all
+  changed_when: true
+  become: true
+  when: iw_install_start_services | bool
+
+- name: Record the installed version
+  ansible.builtin.command:
+    argv:
+      - sh
+      - "{{ iw_tool_cmd }}"
+      - display
+      - system
+      - c_version
+  register: iw_install_version
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Show the installed version
+  ansible.builtin.debug:
+    msg: "IceWarp {{ iw_install_version_id }} -> {{ iw_install_version.stdout | default('n/a') | trim }}"

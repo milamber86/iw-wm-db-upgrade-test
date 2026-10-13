@@ -1,0 +1,121 @@
+---
+- name: Ensure the log directory exists
+  ansible.builtin.file:
+    path: "{{ iw_log_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Write the slow-log ALTER query
+  ansible.builtin.copy:
+    dest: "{{ iw_log_dir }}/alter_query.sql"
+    mode: "0644"
+    content: |
+      SELECT start_time, query_time,
+             REPLACE(REPLACE(sql_text, '\t', ' '), '\n', ' ')
+      FROM mysql.slow_log
+      WHERE sql_text LIKE 'ALTER TABLE%'
+        AND start_time >= '{{ iw_upgrade_t0 }}'
+        AND start_time <= '{{ iw_upgrade_t1 }}'
+      ORDER BY start_time;
+  become: true
+
+- name: Export the captured ALTER rows
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }}
+    --batch --raw --skip-column-names
+    < {{ iw_log_dir }}/alter_query.sql > {{ iw_log_dir }}/slow_log_alters.tsv
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Install the ALTER timing parser
+  ansible.builtin.copy:
+    src: "{{ iw_timing_parser_src }}"
+    dest: "{{ iw_timing_parser_dest }}"
+    mode: "0755"
+  become: true
+
+- name: Parse the captured ALTER timings
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ iw_timing_parser_dest }}"
+      - --slow-log-source
+      - "{{ iw_log_dir }}/slow_log_alters.tsv"
+      - --since
+      - "{{ iw_upgrade_t0 }}"
+      - --until
+      - "{{ iw_upgrade_t1 }}"
+      - --out
+      - "{{ iw_log_dir }}/alter_timings.json"
+  register: iw_timing_parse
+  changed_when: false
+  become: true
+
+- name: Load the parsed timing result
+  ansible.builtin.set_fact:
+    iw_timing_result: "{{ iw_timing_parse.stdout | default('{}') | from_json }}"
+
+- name: Set the report timestamp
+  ansible.builtin.set_fact:
+    iw_report_stamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+  run_once: true
+
+- name: Derive the report filenames
+  ansible.builtin.set_fact:
+    iw_report_md_name: "upgrade_benchmark_{{ iw_report_stamp }}.md"
+    iw_report_json_name: "upgrade_benchmark_{{ iw_report_stamp }}.json"
+  run_once: true
+
+- name: Assemble the report payload
+  ansible.builtin.set_fact:
+    iw_timing_report:
+      generated_at: "{{ iw_report_stamp }}"
+      host: "{{ ansible_host | default(inventory_hostname) }}"
+      upgrade:
+        version_before: "{{ iw_upgrade_version_before }}"
+        version_after: "{{ iw_upgrade_version_after }}"
+        install_seconds: "{{ iw_upgrade_install_seconds | int }}"
+        alter_count: "{{ iw_upgrade_alter_count | int }}"
+        window_start: "{{ iw_upgrade_t0 }}"
+        window_end: "{{ iw_upgrade_t1 }}"
+      pre_tables: "{{ iw_upgrade_pre_tables }}"
+      post_tables: "{{ iw_upgrade_post_tables }}"
+      timing: "{{ iw_timing_result }}"
+
+- name: Render the upgrade benchmark report
+  ansible.builtin.template:
+    src: upgrade_report.md.j2
+    dest: "{{ iw_log_dir }}/{{ iw_report_md_name }}"
+    mode: "0644"
+  become: true
+
+- name: Write the machine-readable timing result
+  ansible.builtin.copy:
+    content: "{{ iw_timing_report | to_nice_json }}\n"
+    dest: "{{ iw_log_dir }}/{{ iw_report_json_name }}"
+    mode: "0644"
+  become: true
+
+- name: Fetch the benchmark report to the control node
+  ansible.builtin.fetch:
+    src: "{{ iw_log_dir }}/{{ iw_report_md_name }}"
+    dest: "{{ iw_reports_dir }}/{{ iw_report_md_name }}"
+    flat: true
+
+- name: Fetch the machine-readable timing result to the control node
+  ansible.builtin.fetch:
+    src: "{{ iw_log_dir }}/{{ iw_report_json_name }}"
+    dest: "{{ iw_reports_dir }}/{{ iw_report_json_name }}"
+    flat: true
+
+- name: Report the artifact locations
+  ansible.builtin.debug:
+    msg:
+      - "ALTERs parsed: {{ iw_timing_result.count | default(0) }} (total {{ iw_timing_result.total_seconds | default(0) }} s)"
+      - "Report: {{ iw_reports_dir }}/{{ iw_report_md_name }}"
+      - "JSON:   {{ iw_reports_dir }}/{{ iw_report_json_name }}"
+  run_once: true

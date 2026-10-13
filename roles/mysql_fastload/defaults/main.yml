@@ -1,0 +1,43 @@
+---
+# Percona Server for MySQL 8.0 for the IceWarp upgrade test bed.
+# MariaDB is intentionally not used: IceWarp and the production dumps are MySQL 8.
+
+mysql_service_name: mysqld
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_charset: utf8mb4
+mysql_collation: utf8mb4_general_ci
+mysql_datadir: /var/lib/mysql
+mysql_socket: /var/lib/mysql/mysql.sock
+mysql_cnf_path: /etc/my.cnf
+mysql_conf_dropin_dir: /etc/my.cnf.d
+mysql_defaults_file: /root/.my.cnf
+mysql_bin: mysql
+mysqladmin_bin: mysqladmin
+
+mysql_root_password: iwrootpass
+mysql_iw_user: iwdb
+mysql_iw_password: iwdbpass
+
+mysql_buffer_pool_size: 96G
+mysql_max_allowed_packet: 1G
+mysql_innodb_buffer_pool_instances: 16
+mysql_innodb_io_capacity: 4000
+mysql_innodb_io_capacity_max: 8000
+
+# Empty IceWarp logical databases created on the test VM.
+iw_db_names:
+  accounts: acc
+  antispam: asp
+  groupware: grw
+  webclient: wc
+  eas: eas
+  dircache: dc
+
+# Fast-import drop-in (durability shortcuts + skip-log-bin) applied around the
+# restore window only, then removed. Affects the whole instance.
+iw_fastload_enabled: true
+iw_fastload_dropin: "{{ mysql_conf_dropin_dir }}/zz-iw-fastload.cnf"
+
+mysql_restart_wait_retries: 60
+mysql_restart_wait_delay_sec: 5

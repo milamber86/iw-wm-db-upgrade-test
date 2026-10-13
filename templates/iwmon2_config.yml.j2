@@ -1,0 +1,65 @@
+# This file is auto-generated for the IceWarp 14.4 upgrade test bed.
+buffer:
+  enabled: false
+  file: ./buffer.bin
+  push: 10s
+tool:
+  path: {{ iw_tool_cmd }}
+  pathdata: {{ iw_install_dir }}/path.dat
+  args: []
+  timeout: 5s
+  metrics:
+    options:
+      host: 127.0.0.1
+    version:
+      metric:
+        period: 30m0s
+    stat:
+      metric:
+        period: 15s
+      easuser: ""
+      easpassword: ""
+    web:
+      metric:
+        period: 15s
+      testmail: "{{ iwmon2_testmail_resolved | default(iwmon2_testmail) }}"
+      globaladmin: globaladmin
+{% if iwmon2_monitored_accounts | length > 0 %}
+      accounts:
+{% for acct in iwmon2_monitored_accounts %}
+        - "{{ acct }}"
+{% endfor %}
+{% endif %}
+    backup:
+      metric:
+        period: 15m0s
+      path: {{ iw_install_dir }}/var/iwbackupstatus.mon
+    sip:
+      metric:
+        period: 30m0s
+    password:
+      metric:
+        period: 1m0s
+    license:
+      metric:
+        period: 15m0s
+    conn:
+      metric:
+        period: 15s
+    queue:
+      metric:
+        period: 15m0s
+    spam:
+      metric:
+        period: 15m0s
+    antivirus:
+      metric:
+        period: 15m0s
+prometheus:
+  listen: 0.0.0.0
+  port: {{ iwmon2_prom_port | default(9090) }}
+zabbix:
+  hostname: {{ inventory_hostname }}
+  servers:
+  - hostname: {{ iwmon2_zabbix_host }}:{{ iwmon2_zabbix_port }}
+    timeout: 5s

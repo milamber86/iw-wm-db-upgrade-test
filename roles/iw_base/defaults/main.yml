@@ -1,0 +1,60 @@
+---
+# Base OS prerequisites for the IceWarp upgrade test guest (AlmaLinux 9 / EL9).
+
+iw_base_hostname: "{{ iw_vm_name }}.loc"
+iw_base_timezone: UTC
+iw_base_become: true
+
+iw_base_packages:
+  - ca-certificates
+  - epel-release
+  - python3
+  - python3-pip
+  - python3-firewall
+  - python3-libselinux
+  - mariadb-connector-c
+  - liblzf
+  - yum-utils
+  - bzip2
+  - tar
+  - gzip
+  - rsync
+  - firewalld
+  - iptables
+  - policycoreutils
+  - freetype
+  - hunspell
+  - libicu
+  - libjpeg-turbo
+  - libpng
+  - libXpm
+  - chkconfig
+  - poppler-utils
+  - poppler-data
+  - dejavu-sans-mono-fonts
+  - dejavu-serif-fonts
+  - google-carlito-fonts
+  - liberation-fonts-common
+  - liberation-mono-fonts
+  - liberation-sans-fonts
+  - liberation-serif-fonts
+  - libreoffice-opensymbol-fonts
+  - 7zip
+  - tidy
+  - wget
+  - curl
+
+iw_firewall_ports:
+  - 25
+  - 465
+  - 587
+  - 110
+  - 143
+  - 993
+  - 995
+  - 80
+  - 443
+  - 5222
+  - 5223
+  - 5229
+  - 3030

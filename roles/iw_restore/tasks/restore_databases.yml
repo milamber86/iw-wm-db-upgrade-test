@@ -1,0 +1,247 @@
+---
+# Runs on the guest (iwtarget). Pulls the selected dumps from prod, imports
+# them under the fast-load drop-in, and points IceWarp at the restored DBs.
+# The `always` block in tasks/main.yml removes the prod firewall exception.
+
+- name: Ensure the local backup staging directory exists
+  ansible.builtin.file:
+    path: "{{ prod_local_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Stage the production SSH key on the guest
+  ansible.builtin.copy:
+    content: "{{ prod_ssh_private_key }}\n"
+    dest: "{{ prod_ssh_key_on_target }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+  when: prod_ssh_private_key | length > 0
+
+- name: Build the guest -> prod ssh/scp command prefixes
+  ansible.builtin.set_fact:
+    _iw_prod_ssh_base:
+      - -o
+      - StrictHostKeyChecking=accept-new
+      - -o
+      - UserKnownHostsFile=/root/.ssh/iw_prod_known_hosts
+      - -o
+      - BatchMode=yes
+    _iw_prod_ssh_key_args: "{{ ['-i', prod_ssh_key_on_target] if (prod_ssh_private_key | length > 0) else [] }}"
+
+- name: List the newest production backups
+  ansible.builtin.command:
+    argv: "{{ ['ssh'] + _iw_prod_ssh_base + _iw_prod_ssh_key_args + [prod_ssh_user ~ '@' ~ prod_ssh_host, 'ls', '-1t', prod_backup_dir ~ '/' ~ prod_backup_glob] }}"
+  register: iw_prod_ls
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Fail when the production backup listing failed
+  ansible.builtin.fail:
+    msg: >-
+      Could not list backups on {{ prod_ssh_user }}@{{ prod_ssh_host }}:{{ prod_backup_dir }}/{{ prod_backup_glob }}.
+      Check the vault prod host/user/key and that the ephemeral firewall
+      exception permits source {{ prod_access_source }}.
+      stderr: {{ iw_prod_ls.stderr | default('') | trim }}
+  when: (iw_prod_ls.rc | default(1)) != 0
+
+- name: Select the newest backup per component type
+  ansible.builtin.set_fact:
+    iw_selected_backups: >-
+      {%- set out = {} -%}
+      {%- for t in ['acc', 'asp', 'grw', 'dc', 'eas', 'wc'] -%}
+        {%- set matches = iw_prod_ls.stdout_lines | default([]) | select('search', 'bck_db_' ~ t ~ '_') | list -%}
+        {%- if matches | length > 0 -%}
+          {%- set _ = out.update({t: matches[0]}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Build the restore plan (type -> source file and target database)
+  ansible.builtin.set_fact:
+    iw_restore_targets: >-
+      {%- set out = [] -%}
+      {%- for pair in (iw_selected_backups | dict2items) -%}
+        {%- set t = pair.key -%}
+        {%- set f = pair.value -%}
+        {%- set base = f | basename -%}
+        {%- set tail = base | regex_replace('^bck_db_' ~ t ~ '_', '') -%}
+        {%- set tail = tail | regex_replace('\\.sql\\.gz$', '') -%}
+        {%- set db = prod_db_names_override[t] if t in (prod_db_names_override | default({})) else (tail | regex_replace('\\d{8}-\\d{4}$', '')) -%}
+        {%- set _ = out.append({'type': t, 'src': f, 'file': base, 'db': db}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Require at least one backup to restore
+  ansible.builtin.assert:
+    that:
+      - iw_restore_targets | length > 0
+    fail_msg: "No bck_db_*.sql.gz backups matched {{ prod_backup_dir }}/{{ prod_backup_glob }}."
+
+- name: Require the accounts backup (the server cannot start without it)
+  ansible.builtin.assert:
+    that:
+      - iw_restore_targets | selectattr('type', 'equalto', 'acc') | list | length > 0
+    fail_msg: "No accounts (acc) backup found; cannot restore IceWarp accounts."
+
+- name: Validate restored database names
+  ansible.builtin.assert:
+    that:
+      - item.db is match('^[A-Za-z0-9_]+$')
+    fail_msg: "Unsafe database name parsed from {{ item.file }}: {{ item.db }}"
+  loop: "{{ iw_restore_targets }}"
+
+- name: Map component type -> restored database
+  ansible.builtin.set_fact:
+    iw_restored_db_by_type: >-
+      {{ dict(iw_restore_targets | map(attribute='type') | list
+              | zip(iw_restore_targets | map(attribute='db') | list)) }}
+
+- name: Resolve the IceWarp storage database per logical component
+  ansible.builtin.set_fact:
+    iw_storage_db:
+      accounts: "{{ iw_restored_db_by_type.acc | default(iw_db_names.accounts) }}"
+      antispam: "{{ iw_restored_db_by_type.asp | default(iw_db_names.antispam) }}"
+      groupware: "{{ iw_restored_db_by_type.grw | default(iw_db_names.groupware) }}"
+      dircache: "{{ iw_restored_db_by_type.dc | default(iw_db_names.dircache) }}"
+      eas: "{{ iw_restored_db_by_type.eas | default(iw_db_names.eas) }}"
+      webclient: "{{ iw_restored_db_by_type.wc | default(iw_db_names.webclient) }}"
+
+- name: Report the restore plan
+  ansible.builtin.debug:
+    msg: >-
+      {{ iw_restore_targets | map(attribute='type') | list | join(', ') }}
+      -> {{ iw_restore_targets | map(attribute='db') | list | join(', ') }}
+      (webclient db {{ iw_storage_db.webclient }})
+
+- name: Stop IceWarp before importing
+  ansible.builtin.command: "{{ iw_icewarpd }} --stop all"
+  changed_when: true
+  failed_when: false
+  become: true
+
+- name: Apply the fast-import tuning for the restore window
+  ansible.builtin.include_role:
+    name: mysql_fastload
+    tasks_from: fastload_apply
+  when: iw_fastload_enabled | bool
+
+- name: Pull the selected backups from production
+  ansible.builtin.command:
+    argv: "{{ ['scp'] + _iw_prod_ssh_base + _iw_prod_ssh_key_args + [prod_ssh_user ~ '@' ~ prod_ssh_host ~ ':' ~ item.src, prod_local_dir ~ '/' ~ item.file] }}"
+  loop: "{{ iw_restore_targets }}"
+  loop_control:
+    label: "{{ item.type }}"
+  changed_when: true
+  become: true
+
+- name: Create the restored databases
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - "CREATE DATABASE IF NOT EXISTS `{{ item.db }}` CHARACTER SET {{ mysql_charset }} COLLATE {{ mysql_collation }}"
+  loop: "{{ iw_restore_targets }}"
+  loop_control:
+    label: "{{ item.db }}"
+  changed_when: false
+  become: true
+
+- name: Grant the IceWarp user on the restored databases
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - "GRANT ALL PRIVILEGES ON `{{ item.db }}`.* TO '{{ mysql_iw_user }}'@'localhost'; GRANT ALL PRIVILEGES ON `{{ item.db }}`.* TO '{{ mysql_iw_user }}'@'127.0.0.1'; FLUSH PRIVILEGES;"
+  loop: "{{ iw_restore_targets }}"
+  loop_control:
+    label: "{{ item.db }}"
+  changed_when: false
+  no_log: true
+  become: true
+
+- name: Import each backup
+  ansible.builtin.shell: |
+    set -o pipefail
+    gunzip -c {{ prod_local_dir }}/{{ item.file }} \
+      | {{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }} {{ item.db }}
+  args:
+    executable: /bin/bash
+  loop: "{{ iw_restore_targets }}"
+  loop_control:
+    label: "{{ item.type }} -> {{ item.db }}"
+  changed_when: true
+  become: true
+
+- name: Point IceWarp at the restored databases
+  ansible.builtin.command:
+    argv: "{{ ['sh', iw_tool_cmd, 'set', 'system', item.key, item.value] }}"
+  loop:
+    - { key: c_system_storage_accounts_odbcconnstring, value: "{{ iw_storage_db.accounts }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
+    - { key: c_as_challenge_connectionstring, value: "{{ iw_storage_db.antispam }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
+    - { key: c_gw_connectionstring, value: "{{ iw_storage_db.groupware }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
+    - { key: c_accounts_global_accounts_directorycacheconnectionstring, value: "{{ iw_storage_db.dircache }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
+    - { key: C_ActiveSync_DBConnection, value: "mysql:host={{ mysql_host }};port={{ mysql_port }};dbname={{ iw_storage_db.eas }}" }
+    - { key: C_ActiveSync_DBUser, value: "{{ mysql_iw_user }}" }
+    - { key: C_ActiveSync_DBPass, value: "{{ mysql_iw_password }}" }
+  loop_control:
+    label: "{{ item.key }}"
+  register: iw_remap
+  changed_when: true
+  failed_when: false
+  no_log: true
+  become: true
+
+- name: Collect connection-string errors
+  ansible.builtin.set_fact:
+    iw_remap_errors: "{{ iw_remap_errors | default([]) + [entry] }}"
+  vars:
+    entry: "{{ item.item.key }}: rc={{ item.rc | default('?') }} {{ ((item.stderr | default('')) ~ ' ' ~ (item.stdout | default('')))[:300] }}"
+  loop: "{{ iw_remap.results }}"
+  when: (item.rc | default(0)) != 0
+  no_log: true
+
+- name: Fail when a connection-string update was rejected
+  ansible.builtin.fail:
+    msg: "IceWarp database remap failed: {{ iw_remap_errors | join(' | ') }}"
+  when: iw_remap_errors | default([]) | length > 0
+
+- name: Ensure the webmail config directory exists
+  ansible.builtin.file:
+    path: "{{ iw_config_dir }}/_webmail"
+    state: directory
+    owner: "{{ iw_run_as_user | default('icewarp') }}"
+    group: "{{ iw_run_as_user | default('icewarp') }}"
+    mode: "0755"
+  become: true
+
+- name: Write the webclient database connection
+  ansible.builtin.template:
+    src: wc_server.xml.j2
+    dest: "{{ iw_config_dir }}/_webmail/server.xml"
+    owner: "{{ iw_run_as_user | default('icewarp') }}"
+    group: "{{ iw_run_as_user | default('icewarp') }}"
+    mode: "0660"
+  become: true
+  no_log: true
+
+- name: Record the restore summary
+  ansible.builtin.set_fact:
+    iw_restore_summary:
+      targets: "{{ iw_restore_targets }}"
+      storage_db: "{{ iw_storage_db }}"
+      completed_at: "{{ ansible_date_time.iso8601 | default('') }}"
+
+- name: Revert the fast-import tuning before the upgrade
+  ansible.builtin.include_role:
+    name: mysql_fastload
+    tasks_from: fastload_revert
+  when: iw_fastload_enabled | bool

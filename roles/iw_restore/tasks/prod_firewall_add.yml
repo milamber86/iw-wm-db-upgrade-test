@@ -1,0 +1,95 @@
+---
+# Runs on the production host (delegate_to prod). Adds a single tagged SSH
+# exception for the guest egress source, and records whether it was new.
+
+- name: Detect the iptables binary on the production host
+  ansible.builtin.command: command -v iptables
+  register: iw_prod_iptables
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+
+- name: Detect firewalld state on the production host
+  ansible.builtin.command: systemctl is-active firewalld
+  register: iw_prod_firewalld
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+
+- name: Select the production firewall backend
+  ansible.builtin.set_fact:
+    iw_prod_fw_backend: >-
+      {{
+        'iptables'
+        if (prod_firewall_backend in ['auto', 'iptables'] and (iw_prod_iptables.rc | default(1)) == 0)
+        else ('firewalld' if (prod_firewall_backend in ['auto', 'firewalld']) else 'none')
+      }}
+
+- name: Add the tagged iptables exception (iptables backend)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CMT="{{ prod_firewall_comment }}"
+    SRC="{{ prod_access_source }}"
+    if iptables -C INPUT -s "$SRC" -p tcp --dport 22 -m comment --comment "$CMT" -j ACCEPT 2>/dev/null; then
+      echo EXISTS
+    else
+      iptables -I INPUT 1 -s "$SRC" -p tcp --dport 22 -m comment --comment "$CMT" -j ACCEPT
+      echo ADDED
+    fi
+  args:
+    executable: /bin/bash
+  register: iw_prod_ipt_add
+  changed_when: "'ADDED' in (iw_prod_ipt_add.stdout | default(''))"
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: iw_prod_fw_backend == 'iptables'
+
+- name: Persist iptables rules on the production host
+  ansible.builtin.shell: |
+    if command -v service >/dev/null 2>&1 && service iptables save >/dev/null 2>&1; then
+      echo SAVED
+    else
+      echo NO-SAVE
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: (iw_prod_ipt_add.changed | default(false))
+
+- name: Add the source-restricted rich rule (firewalld backend)
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --permanent
+      - "--add-rich-rule=rule family=\"ipv4\" source address=\"{{ prod_access_source }}\" port port=\"22\" protocol=\"tcp\" accept"
+  register: iw_prod_fwd_add
+  changed_when: "'already' not in (iw_prod_fwd_add.stdout | default('') | lower)"
+  failed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when: iw_prod_fw_backend == 'firewalld'
+
+- name: Reload firewalld on the production host
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: false
+  delegate_to: "{{ prod_host }}"
+  become: true
+  when:
+    - iw_prod_fw_backend == 'firewalld'
+    - (iw_prod_fwd_add.changed | default(false))
+
+- name: Record that the exception must be torn down
+  ansible.builtin.set_fact:
+    iw_prod_fw_added: true
+
+- name: Report the production firewall exception
+  ansible.builtin.debug:
+    msg: >-
+      Production SSH exception for {{ prod_access_source }} via
+      {{ iw_prod_fw_backend }}
+      ({{ 'newly added' if ((iw_prod_ipt_add.changed | default(false)) or (iw_prod_fwd_add.changed | default(false))) else 'already present' }}).

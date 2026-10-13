@@ -1,0 +1,29 @@
+---
+iw_version_144: "14.4.0.0_20261012"
+iw_version_144_url: ""
+iw_pkg_sha256_144: ""
+
+iw_install_dir: /opt/icewarp
+iw_tool_cmd: "{{ iw_install_dir }}/tool.sh"
+iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
+iw_log_dir: /var/log/iw
+iw_download_dir: /var/tmp/iw-install
+iw_run_as_user: icewarp
+iw_nfr_license: ""
+
+mysql_bin: mysql
+mysql_defaults_file: /root/.my.cnf
+
+iw_db_names:
+  accounts: acc
+  antispam: asp
+  groupware: grw
+  webclient: wc
+  eas: eas
+  dircache: dc
+
+# Slow-log capture window.
+iw_upgrade_warmup_sec: 90
+iw_upgrade_settle_timeout_sec: 3600
+iw_upgrade_quiet_sec: 120
+iw_upgrade_extra_wait_sec: 30

@@ -1,0 +1,135 @@
+---
+- name: Start IceWarp with the restored data
+  ansible.builtin.command: "{{ iw_icewarpd }} --restart all"
+  changed_when: true
+  failed_when: false
+  become: true
+
+- name: Wait until tool.sh responds
+  ansible.builtin.command:
+    argv: [sh, "{{ iw_tool_cmd }}", display, system, c_version]
+  register: iw_version_probe
+  until: (iw_version_probe.rc | default(1)) == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Export every IceWarp account
+  ansible.builtin.command:
+    argv: [sh, "{{ iw_tool_cmd }}", export, account, "*@*"]
+  register: iw_accounts
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Persist the account export
+  ansible.builtin.copy:
+    content: "{{ iw_accounts.stdout | default('') }}"
+    dest: "{{ iw_log_dir }}/accounts.txt"
+    mode: "0644"
+  become: true
+
+- name: Require the restored accounts to be visible
+  ansible.builtin.assert:
+    that:
+      - iw_accounts.stdout_lines | default([]) | length > 0
+    fail_msg: >-
+      tool.sh export account '*@*' returned no accounts. The accounts database
+      may not have been restored or remapped correctly.
+
+- name: Report the account count
+  ansible.builtin.debug:
+    msg: "Restored accounts: {{ iw_accounts.stdout_lines | default([]) | length }} (first: {{ iw_accounts.stdout_lines | default([]) | first | default('n/a') | truncate(60) }})"
+
+- name: Derive the iwmon2 test mailbox
+  ansible.builtin.set_fact:
+    iwmon2_testmail_resolved: >-
+      {{ iwmon2_testmail if (iwmon2_testmail | length > 0)
+         else ((iw_accounts.stdout_lines | default([])
+                | map('split', ',') | map('first')
+                | select('search', '@') | list | first) | default('globaladmin@localhost')) }}
+
+- name: Create the iwmon2 directory
+  ansible.builtin.file:
+    path: "{{ iwmon2_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Download the iwmon2 binary
+  ansible.builtin.get_url:
+    url: "{{ iwmon2_url }}"
+    dest: "{{ iwmon2_dir }}/iwmon2"
+    mode: "0700"
+    validate_certs: false
+    timeout: 600
+  become: true
+
+- name: Render the iwmon2 config (always, to pick up the restored accounts)
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../templates/iwmon2_config.yml.j2"
+    dest: "{{ iwmon2_dir }}/config.yml"
+    mode: "0644"
+  become: true
+
+- name: Install the iwmon2 systemd unit
+  ansible.builtin.template:
+    src: iwmon2_service_file.j2
+    dest: /etc/systemd/system/iwmon2.service
+    mode: "0644"
+  become: true
+
+- name: Start iwmon2
+  ansible.builtin.systemd:
+    name: iwmon2
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Wait for IceWarp services to report healthy through iwmon2
+  ansible.builtin.shell: "cd {{ iwmon2_dir }} && ./iwmon2 tool stat"
+  register: iwmon2_stat
+  until: >-
+    ('"Smtp": 220' in (iwmon2_stat.stdout | default('')))
+    and ('"Imap": 1' in (iwmon2_stat.stdout | default('')))
+    and ('"Xmpp": 1' in (iwmon2_stat.stdout | default('')))
+  retries: "{{ iwmon2_wait_retries }}"
+  delay: "{{ iwmon2_wait_delay_sec }}"
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Require SMTP, IMAP and XMPP to be up
+  ansible.builtin.assert:
+    that:
+      - >-
+        '"Smtp": 220' in (iwmon2_stat.stdout | default(''))
+      - >-
+        '"Imap": 1' in (iwmon2_stat.stdout | default(''))
+      - >-
+        '"Xmpp": 1' in (iwmon2_stat.stdout | default(''))
+    fail_msg: "IceWarp service check failed: {{ iwmon2_stat.stdout | default('') | truncate(500) }}"
+
+- name: Probe the IceWarp web stack through iwmon2
+  ansible.builtin.shell: "cd {{ iwmon2_dir }} && ./iwmon2 tool web"
+  register: iwmon2_web
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Require the web probe to report OK
+  ansible.builtin.assert:
+    that:
+      - "'Logout' in (iwmon2_web.stdout | default(''))"
+      - "'OK' in (iwmon2_web.stdout | default(''))"
+    fail_msg: "IceWarp web probe failed: {{ iwmon2_web.stdout | default('') | truncate(500) }}"
+
+- name: Record the validation summary
+  ansible.builtin.set_fact:
+    iw_validate_summary:
+      account_count: "{{ iw_accounts.stdout_lines | default([]) | length }}"
+      iwmon2_testmail: "{{ iwmon2_testmail_resolved }}"
+      version: "{{ iw_version_probe.stdout | default('') | trim }}"

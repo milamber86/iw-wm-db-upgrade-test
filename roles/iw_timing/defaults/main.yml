@@ -1,0 +1,21 @@
+---
+iw_log_dir: /var/log/iw
+mysql_bin: mysql
+mysql_defaults_file: /root/.my.cnf
+
+iw_upgrade_t0: ""
+iw_upgrade_t1: ""
+iw_upgrade_version_before: ""
+iw_upgrade_version_after: ""
+iw_upgrade_install_seconds: 0
+iw_upgrade_alter_count: 0
+iw_upgrade_pre_tables: {}
+iw_upgrade_post_tables: {}
+
+# Parsed ALTER timing output.
+iw_timing_result: {}
+
+# Parser is shipped in the repo (scripts/parse_alter_timings.py).
+iw_timing_parser_src: "{{ playbook_dir }}/../scripts/parse_alter_timings.py"
+iw_timing_parser_dest: /usr/local/bin/parse_alter_timings.py
+iw_reports_dir: "{{ playbook_dir }}/../reports"

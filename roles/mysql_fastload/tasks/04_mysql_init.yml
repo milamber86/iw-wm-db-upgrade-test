@@ -1,0 +1,73 @@
+---
+- name: Start and enable mysqld
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Check root access with the configured password
+  ansible.builtin.shell: "{{ mysql_bin }} -uroot -p'{{ mysql_root_password }}' -e 'SELECT 1;'"
+  register: dbaccess_password
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Check socket root access without a password
+  ansible.builtin.shell: "{{ mysql_bin }} -uroot -e 'SELECT 1;'"
+  register: dbaccess_socket
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Read the temporary root password from the log
+  ansible.builtin.shell: >-
+    sed -n 's/.*temporary password is generated for root@localhost: //p'
+    /var/log/mysqld.log | tail -n1
+  register: temppass
+  when: dbaccess_password.rc != 0
+  changed_when: false
+
+- name: Set the root password via socket authentication
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} -uroot -e
+    "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_root_password }}';"
+  when:
+    - dbaccess_password.rc != 0
+    - dbaccess_socket.rc == 0
+  no_log: true
+
+- name: Set the root password via the temporary password
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} -uroot -p'{{ temppass.stdout }}' --connect-expired-password
+    -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_root_password }}';"
+  when:
+    - dbaccess_password.rc != 0
+    - dbaccess_socket.rc != 0
+    - temppass.stdout | default('') | length > 0
+  no_log: true
+
+- name: Write /root/.my.cnf
+  ansible.builtin.template:
+    src: credentials.j2
+    dest: "{{ mysql_defaults_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Verify the client config works
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-extra-file={{ mysql_defaults_file }}"
+      - -e
+      - SELECT VERSION(), @@lower_case_table_names
+  register: mysql_version_check
+  changed_when: false
+
+- name: Show server version and lower_case_table_names
+  ansible.builtin.debug:
+    msg: "{{ mysql_version_check.stdout_lines }}"

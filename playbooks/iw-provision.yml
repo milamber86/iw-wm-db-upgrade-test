@@ -1,0 +1,12 @@
+---
+# Provision only: create/ensure the upgrade test VM and add it to the in-memory
+# inventory. Use the full orchestrator for the whole cycle:
+#
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml
+#
+# VPSCTL_TOKEN must be exported on the control node.
+- name: Provision the IceWarp 14.4 upgrade test VM
+  hosts: hypervisors
+  gather_facts: false
+  roles:
+    - role: iw_provision

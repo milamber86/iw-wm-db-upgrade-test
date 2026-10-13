@@ -1,0 +1,25 @@
+---
+- name: Modify Linux PAM limits for MySQL
+  ansible.builtin.lineinfile:
+    path: /etc/security/limits.conf
+    line: "{{ item }}"
+    create: true
+    mode: "0644"
+  loop:
+    - "* soft nofile 4096"
+    - "* hard nofile 10240"
+
+- name: Ensure ca-certificates is current
+  ansible.builtin.dnf:
+    name: ca-certificates
+    state: latest
+
+- name: Ensure SELinux python bindings are installed
+  ansible.builtin.dnf:
+    name: python3-libselinux
+    state: present
+
+- name: Put SELinux in permissive mode
+  ansible.builtin.command: setenforce 0
+  changed_when: false
+  failed_when: false

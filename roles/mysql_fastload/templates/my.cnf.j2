@@ -1,0 +1,35 @@
+# Percona Server for MySQL 8.0 — IceWarp upgrade test bed (generated).
+# Written before the first server start so the datadir is initialized with
+# lower_case_table_names=1 (required by IceWarp).
+[client]
+socket={{ mysql_socket }}
+
+[mysqld]
+server-id=1
+lower_case_table_names = 1
+datadir={{ mysql_datadir }}
+socket={{ mysql_socket }}
+log-error=/var/log/mysqld.log
+pid-file=/var/run/mysqld/mysqld.pid
+binlog_format=ROW
+log_bin={{ mysql_datadir }}/binlog
+binlog_expire_logs_seconds=604800
+collation_server = {{ mysql_collation }}
+character_set_server = {{ mysql_charset }}
+init_connect="SET NAMES {{ mysql_charset }}"
+
+# IceWarp storage / fast dump import.
+innodb_file_per_table = 1
+max_allowed_packet = {{ mysql_max_allowed_packet }}
+innodb_buffer_pool_size = {{ mysql_buffer_pool_size }}
+innodb_buffer_pool_instances = {{ mysql_innodb_buffer_pool_instances }}
+innodb_flush_method = O_DIRECT
+innodb_io_capacity = {{ mysql_innodb_io_capacity }}
+innodb_io_capacity_max = {{ mysql_innodb_io_capacity_max }}
+innodb_redo_log_capacity = 8G
+innodb_autoinc_lock_mode = 2
+# Keep DDL logging available for the upgrade ALTER capture.
+log_slow_admin_statements = ON
+
+# Load the fast-import drop-in (zz-iw-fastload.cnf) when present.
+!includedir {{ mysql_conf_dropin_dir }}
