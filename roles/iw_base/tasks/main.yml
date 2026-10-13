@@ -25,6 +25,66 @@
     state: present
   become: "{{ iw_base_become }}"
 
+# The vpsctl overlay is provisioned at iw_vm_disk_gb, but the AlmaLinux template
+# ships a small (35G) LVM root. Grow the partition, PV and LV to use the whole
+# disk so restored production data fits. Idempotent: a second run is a no-op.
+- name: Extend the root partition, LVM and filesystem to fill the disk
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ROOT_SRC=$(findmnt -n -o SOURCE /)
+    if ! lvs "$ROOT_SRC" >/dev/null 2>&1; then
+      echo "status=not-lvm (root filesystem is not LVM-backed; skipping)"
+      exit 0
+    fi
+    VG=$(lvs --noheadings -o vg_name "$ROOT_SRC" | xargs)
+    PV=$(pvs --noheadings -o pv_name --select "vg_name=$VG" | xargs | awk '{print $1}')
+    PARTNUM_FILE="/sys/class/block/$(basename "$PV")/partition"
+    DISK="/dev/$(lsblk -nd -o pkname "$PV" | xargs)"
+    CHANGED=0
+
+    if [ -f "$PARTNUM_FILE" ]; then
+      PARTNUM=$(cat "$PARTNUM_FILE")
+      if growpart "$DISK" "$PARTNUM" >/tmp/iw-growpart.out 2>&1; then
+        CHANGED=1
+      elif grep -q NOCHANGE /tmp/iw-growpart.out; then
+        :
+      else
+        cat /tmp/iw-growpart.out
+        exit 1
+      fi
+    fi
+
+    pvresize "$PV" >/dev/null
+
+    FREE=$(vgs --noheadings --units b --nosuffix -o vg_free "$VG" | xargs | cut -d. -f1)
+    if [ "${FREE:-0}" -gt 0 ]; then
+      lvextend -l +100%FREE "$ROOT_SRC" >/dev/null
+      CHANGED=1
+    fi
+
+    FSTYPE=$(findmnt -n -o FSTYPE /)
+    if [ "$FSTYPE" = "xfs" ]; then
+      xfs_growfs / >/dev/null
+    elif [ "$FSTYPE" = "ext4" ]; then
+      resize2fs "$ROOT_SRC" >/dev/null
+    fi
+
+    if [ "$CHANGED" = "1" ]; then
+      echo "status=extended"
+    else
+      echo "status=unchanged"
+    fi
+    echo "root filesystem size: $(df -h --output=size / | tail -1 | tr -d ' ')"
+  args:
+    executable: /bin/bash
+  register: iw_base_rootfs
+  changed_when: "'status=extended' in iw_base_rootfs.stdout"
+  become: "{{ iw_base_become }}"
+
+- name: Report the root filesystem size
+  ansible.builtin.debug:
+    msg: "{{ iw_base_rootfs.stdout | default('') | trim | split('\n') }}"
+
 - name: Raise TCP listen/SYN backlog for IceWarp
   ansible.builtin.copy:
     dest: /etc/sysctl.d/99-iw-upgrade.conf

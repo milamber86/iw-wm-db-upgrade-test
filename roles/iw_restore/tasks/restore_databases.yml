@@ -225,7 +225,7 @@
 
 - name: Write the webclient database connection
   ansible.builtin.template:
-    src: wc_server.xml.j2
+    src: "{{ role_path }}/../../templates/wc_server.xml.j2"
     dest: "{{ iw_config_dir }}/_webmail/server.xml"
     owner: "{{ iw_run_as_user | default('icewarp') }}"
     group: "{{ iw_run_as_user | default('icewarp') }}"

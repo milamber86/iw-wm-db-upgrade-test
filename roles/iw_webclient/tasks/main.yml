@@ -1,0 +1,19 @@
+---
+- name: Ensure the WebClient config directory exists
+  ansible.builtin.file:
+    path: "{{ iw_config_dir }}/_webmail"
+    state: directory
+    owner: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+    mode: "0755"
+  become: true
+
+- name: Write the WebClient server-side database configuration
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../templates/wc_server.xml.j2"
+    dest: "{{ iw_config_dir }}/_webmail/server.xml"
+    owner: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+    mode: "0660"
+  become: true
+  no_log: true

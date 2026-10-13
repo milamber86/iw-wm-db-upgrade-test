@@ -76,7 +76,7 @@
 
 - name: Install the iwmon2 systemd unit
   ansible.builtin.template:
-    src: iwmon2_service_file.j2
+    src: "{{ role_path }}/../../templates/iwmon2_service_file.j2"
     dest: /etc/systemd/system/iwmon2.service
     mode: "0644"
   become: true

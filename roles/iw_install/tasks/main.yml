@@ -5,6 +5,34 @@
       - iw_install_url | length > 0
     fail_msg: "iw_install_url is required (e.g. iw_version_143_url)."
 
+# Idempotency: skip the download/extract/installer when this role already
+# installed the requested version. Deterministic - based on an on-disk marker,
+# not on the IceWarp runtime being responsive (it briefly is not right after
+# Percona restarts). The 14.4 step is not skipped because it asks for a
+# different version.
+- name: Check whether IceWarp is already installed
+  ansible.builtin.stat:
+    path: "{{ iw_tool_cmd }}"
+  register: iw_tool_present
+  become: true
+
+- name: Check whether this version was already installed
+  ansible.builtin.stat:
+    path: "{{ iw_install_marker_dir }}/{{ iw_install_version_id }}"
+  register: iw_install_marker
+  become: true
+
+- name: Decide whether the pinned version must be installed
+  ansible.builtin.set_fact:
+    iw_install_needed: >-
+      {{ not ((iw_tool_present.stat.exists | bool) and (iw_install_marker.stat.exists | bool)) }}
+
+- name: Report the IceWarp install decision
+  ansible.builtin.debug:
+    msg: >-
+      tool={{ iw_tool_present.stat.exists }} marker={{ iw_install_marker.stat.exists }} target={{ iw_install_version_id }}
+      -> {{ 'install' if iw_install_needed | bool else 'already installed, skipping installer' }}
+
 - name: Ensure the download and log directories exist
   ansible.builtin.file:
     path: "{{ item }}"
@@ -13,6 +41,7 @@
   loop:
     - "{{ iw_download_dir }}"
     - "{{ iw_log_dir }}"
+    - "{{ iw_install_marker_dir }}"
   become: true
 
 - name: Download the IceWarp package for {{ iw_install_version_id }}
@@ -24,6 +53,7 @@
     checksum: "{{ ('sha256:' ~ iw_install_sha256) if (iw_install_sha256 | length > 0) else omit }}"
   register: iw_pkg_download
   become: true
+  when: iw_install_needed | bool
 
 - name: Extract the IceWarp package
   ansible.builtin.unarchive:
@@ -31,6 +61,7 @@
     dest: "{{ iw_download_dir }}"
     remote_src: true
   become: true
+  when: iw_install_needed | bool
 
 - name: Locate the installer script
   ansible.builtin.find:
@@ -40,15 +71,19 @@
     file_type: file
   register: iw_installer_find
   become: true
+  when: iw_install_needed | bool
 
 - name: Fail when no installer was found
   ansible.builtin.fail:
     msg: "install.sh not found under {{ iw_download_dir }} after extracting {{ iw_install_url }}"
-  when: iw_installer_find.matched == 0
+  when:
+    - iw_install_needed | bool
+    - iw_installer_find.matched == 0
 
 - name: Record the installer directory
   ansible.builtin.set_fact:
     iw_installer_dir: "{{ iw_installer_find.files[0].path | dirname }}"
+  when: iw_install_needed | bool
 
 - name: Locate the internal _install.sh
   ansible.builtin.find:
@@ -57,6 +92,7 @@
     file_type: file
   register: iw_internal_find
   become: true
+  when: iw_install_needed | bool
 
 - name: Disable the clean-install guard checks
   ansible.builtin.replace:
@@ -68,8 +104,26 @@
     - "{{ icewarp_existing_dir_guard }}"
   become: true
   when:
+    - iw_install_needed | bool
     - iw_install_patch_guards | bool
     - iw_internal_find.matched > 0
+
+- name: Create the IceWarp service group
+  ansible.builtin.group:
+    name: "{{ iw_run_as_user }}"
+    system: true
+  become: true
+
+- name: Create the IceWarp service user and group
+  ansible.builtin.user:
+    name: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+    system: true
+    home: "{{ iw_install_dir }}"
+    create_home: false
+    shell: /bin/bash
+    state: present
+  become: true
 
 - name: Run the IceWarp installer in automatic mode (capturing stdout+stderr)
   ansible.builtin.shell: |
@@ -84,7 +138,9 @@
   register: iw_install_run
   changed_when: true
   become: true
-  when: iw_install_tee_log | bool
+  when:
+    - iw_install_needed | bool
+    - iw_install_tee_log | bool
 
 - name: Run the IceWarp installer in automatic mode
   ansible.builtin.command:
@@ -105,7 +161,9 @@
   register: iw_install_run
   changed_when: true
   become: true
-  when: not (iw_install_tee_log | bool)
+  when:
+    - iw_install_needed | bool
+    - not (iw_install_tee_log | bool)
 
 - name: Assert the tool binary is present
   ansible.builtin.stat:
@@ -119,6 +177,16 @@
       IceWarp {{ iw_tool_cmd }} is missing after installing {{ iw_install_version_id }}.
       See {{ iw_log_dir }}/{{ iw_install_log_name }} and /root/icewarp-install-error.log.
   when: not iw_tool_stat.stat.exists
+
+- name: Record the installed IceWarp version marker
+  ansible.builtin.copy:
+    content: "{{ iw_install_version_id }}\n"
+    dest: "{{ iw_install_marker_dir }}/{{ iw_install_version_id }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: iw_tool_stat.stat.exists
 
 - name: Ensure the IceWarp service user has a login shell
   ansible.builtin.user:

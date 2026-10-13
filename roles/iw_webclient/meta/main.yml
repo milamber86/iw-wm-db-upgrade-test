@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_webclient
+  author: iw-wm-db-upgrade-test
+  description: Write the IceWarp WebClient server-side database configuration (_webmail/server.xml).
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

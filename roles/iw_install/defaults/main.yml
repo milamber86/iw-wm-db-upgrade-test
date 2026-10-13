@@ -21,6 +21,10 @@ iw_install_patch_guards: true
 iw_install_apply_license: true
 iw_install_start_services: true
 
+# Idempotency marker: one file per installed version, written after a successful
+# install. Re-running with the same version skips download/extract/installer.
+iw_install_marker_dir: /var/lib/iw-upgrade-test
+
 # Capture stdout+stderr to {{ iw_log_dir }}/{{ iw_install_log_name }} via tee.
 iw_install_tee_log: false
 iw_install_log_name: "install-{{ iw_install_version_id }}.log"

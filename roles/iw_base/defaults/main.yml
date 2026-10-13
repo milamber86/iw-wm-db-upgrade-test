@@ -15,6 +15,9 @@ iw_base_packages:
   - mariadb-connector-c
   - liblzf
   - yum-utils
+  - cloud-utils-growpart
+  - lvm2
+  - xfsprogs
   - bzip2
   - tar
   - gzip

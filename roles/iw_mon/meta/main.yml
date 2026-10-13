@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_mon
+  author: iw-wm-db-upgrade-test
+  description: Deploy iwmon2 (IceWarp service/account monitor) at test-bed install time.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

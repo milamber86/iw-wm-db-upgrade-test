@@ -1,0 +1,7 @@
+---
+- name: Restart iwmon2
+  ansible.builtin.systemd:
+    name: iwmon2
+    state: restarted
+    daemon_reload: true
+  become: true

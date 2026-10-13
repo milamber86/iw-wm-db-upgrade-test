@@ -1,0 +1,60 @@
+---
+- name: Create the iwmon2 directory
+  ansible.builtin.file:
+    path: "{{ iwmon2_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Download the iwmon2 binary
+  ansible.builtin.get_url:
+    url: "{{ iwmon2_url }}"
+    dest: "{{ iwmon2_dir }}/iwmon2"
+    mode: "0700"
+    validate_certs: false
+    timeout: 600
+  become: true
+
+- name: Render the iwmon2 config
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../templates/iwmon2_config.yml.j2"
+    dest: "{{ iwmon2_dir }}/config.yml"
+    mode: "0644"
+  become: true
+  notify: Restart iwmon2
+
+- name: Install the iwmon2 systemd unit
+  ansible.builtin.template:
+    src: "{{ role_path }}/../../templates/iwmon2_service_file.j2"
+    dest: /etc/systemd/system/iwmon2.service
+    mode: "0644"
+  become: true
+  notify: Restart iwmon2
+
+- name: Set ownership on the iwmon2 directory
+  ansible.builtin.file:
+    path: "{{ iwmon2_dir }}"
+    state: directory
+    recurse: true
+    owner: "{{ iw_run_as_user }}"
+    group: "{{ iw_run_as_user }}"
+  become: true
+
+- name: Start and enable iwmon2
+  ansible.builtin.systemd:
+    name: iwmon2
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Probe iwmon2 tool stat
+  ansible.builtin.shell: "cd {{ iwmon2_dir }} && ./iwmon2 tool stat"
+  register: iwmon2_stat_probe
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Show the iwmon2 service status
+  ansible.builtin.debug:
+    msg: "{{ iwmon2_stat_probe.stdout_lines | default([]) | truncate(500) }}"

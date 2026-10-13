@@ -1,8 +1,16 @@
 ---
-- name: Remove conflicting MySQL/MariaDB packages
-  ansible.builtin.shell: dnf -y remove 'mariadb*' 'MariaDB*' 'mysql*' 'MySQL*' || true
+- name: Remove conflicting MySQL/MariaDB server packages
+  # Keep mariadb-connector-c: IceWarp's `/opt/icewarp/tool` links libmariadb.so.3.
+  ansible.builtin.shell: >-
+    dnf -y remove 'mariadb*' 'MariaDB*' 'mysql*' 'MySQL*'
+    --exclude='mariadb-connector-c' || true
   changed_when: false
   failed_when: false
+
+- name: Ensure the MariaDB client library required by IceWarp is installed
+  ansible.builtin.dnf:
+    name: mariadb-connector-c
+    state: present
 
 - name: Ensure python3 and pip are installed
   ansible.builtin.dnf:

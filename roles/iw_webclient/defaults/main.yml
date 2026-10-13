@@ -1,0 +1,13 @@
+---
+# WebClient server-side database connection file
+# (/opt/icewarp/config/_webmail/server.xml). Written at install time and
+# re-rendered by iw_restore with the restored production database names.
+iw_install_dir: /opt/icewarp
+iw_config_dir: "{{ iw_install_dir }}/config"
+iw_run_as_user: icewarp
+iw_storage_db: "{{ iw_db_names | default({}) }}"
+
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_iw_user: iwdb
+mysql_iw_password: iwdbpass

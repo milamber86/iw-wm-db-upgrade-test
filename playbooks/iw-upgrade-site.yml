@@ -33,6 +33,8 @@
         iw_install_start_services: true
         iw_install_tee_log: true
         iw_install_log_name: "install-14.3.log"
+    - role: iw_webclient
+    - role: iw_mon
 
 - name: Restore production databases
   hosts: iwtarget

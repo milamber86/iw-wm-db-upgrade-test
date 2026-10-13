@@ -154,8 +154,8 @@ See `.kilo/plans/1791898144101-icewarp-143-144-upgrade-test.md` for the design.
 
 ```
 inventory/iwupgrade/hosts.yml               hypervisors, production, iwtarget (runtime)
-inventory/iwupgrade/group_vars/all.yml      versions, tuning, VM/prod settings
-inventory/iwupgrade/group_vars/all/vault.yml.example
+inventory/iwupgrade/group_vars/all/main.yml versions, tuning, VM/prod settings
+inventory/iwupgrade/.vault.yml.example      secrets template (-> group_vars/all/vault.yml)
 playbooks/iw-provision.yml                  play 1 only (create VM + add_host)
 playbooks/iw-upgrade-site.yml               full orchestrator
 roles/iw_provision                          vps_vm wrapper + IP discovery + generated inventory
@@ -176,8 +176,9 @@ templates/iwmon2_config.yml.j2              iwmon2 config, accounts from tool.sh
 1. `VPSCTL_TOKEN` exported on the control node (vpsctl bootstrap admin token).
 2. A template (`tpl_L1_OB_almalinux9.qcow2`) and network (`br0-net`) registered in
    vpsctl; confirm with `vpsctl template list` / `vpsctl network list`.
-3. `inventory/iwupgrade/group_vars/all/vault.yml` created from the `.example`,
-   filled with the prod SSH target/key and MySQL passwords, and encrypted.
+3. `inventory/iwupgrade/group_vars/all/vault.yml` created from
+   `inventory/iwupgrade/.vault.yml.example`, filled with the prod SSH target/key
+   and MySQL passwords, and encrypted.
 4. Cloud-init user/SSH key (or a documented existing login) for the guest.
 
 `ansible.cfg` `roles_path` includes the infralab-hv-orc roles so the `vps_vm`

@@ -1,14 +1,14 @@
 ---
 # Copy to inventory/iwupgrade/group_vars/all/vault.yml, fill in, then encrypt:
 #
-#   cp inventory/iwupgrade/group_vars/all/vault.yml.example \
+#   cp inventory/iwupgrade/.vault.yml.example \
 #      inventory/iwupgrade/group_vars/all/vault.yml
 #   $EDITOR inventory/iwupgrade/group_vars/all/vault.yml
 #   ansible-vault encrypt inventory/iwupgrade/group_vars/all/vault.yml
 #
 # Run with: ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml --ask-vault-pass
 #
-# Every key below has a non-secret default in group_vars/all.yml, so the
+# Every key below has a non-secret default in group_vars/all/main.yml, so the
 # playbook can start without a vault file; fill the vault before a real run.
 
 # --- guest cloud-init / SSH -------------------------------------------------

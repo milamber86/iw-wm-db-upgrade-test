@@ -6,3 +6,6 @@ __pycache__/
 reports/*.md
 reports/*.json
 !reports/.gitkeep
+
+# Provisioning runtime cache (guest IP from iw_provision)
+inventory/iwupgrade/.generated.yml

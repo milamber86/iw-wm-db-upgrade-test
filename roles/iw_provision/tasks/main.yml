@@ -114,6 +114,12 @@
   become: false
   when: iw_generated_inventory | length > 0
 
+- name: Wait for the guest to accept SSH before the target plays run
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ iw_vm_wait_timeout }}"
+  delegate_to: "{{ iw_vm_name }}"
+  when: not (iw_vm_skip_provision | bool)
+
 - name: Report the provisioned guest
   ansible.builtin.debug:
     msg: "{{ iw_vm_name }} is reachable at {{ iw_target_ip }} (user {{ iw_vm_cloud_user }})"
