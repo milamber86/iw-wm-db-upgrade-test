@@ -97,7 +97,7 @@
 
 - name: Record the capture start timestamp
   ansible.builtin.set_fact:
-    iw_upgrade_t0: "{{ iw_upgrade_slowlog_enable.stdout_lines | default([]) | select('length') | list | last | default('') | trim }}"
+    iw_upgrade_t0: "{{ iw_upgrade_slowlog_enable.stdout_lines | default([]) | select() | list | last | default('') | trim }}"
 
 - name: Fail when the capture window start was not recorded
   ansible.builtin.assert:
@@ -123,7 +123,10 @@
     iw_install_url: "{{ iw_version_144_url }}"
     iw_install_version_id: "{{ iw_version_144 }}"
     iw_install_sha256: "{{ iw_pkg_sha256_144 }}"
-    iw_install_patch_guards: true
+    # Must stay false: the guard being patched is the installer's upgrade-vs-new
+    # decision, so patching it forces a new install that never applies the 14.4
+    # payload. With the existing config present, --auto detects the upgrade.
+    iw_install_patch_guards: false
     iw_install_apply_license: false
     iw_install_start_services: false
     iw_install_tee_log: true
@@ -190,7 +193,7 @@
 
 - name: Store the capture end timestamp
   ansible.builtin.set_fact:
-    iw_upgrade_t1: "{{ iw_upgrade_slowlog_disable.stdout_lines | default([]) | select('length') | list | last | default('') | trim }}"
+    iw_upgrade_t1: "{{ iw_upgrade_slowlog_disable.stdout_lines | default([]) | select() | list | last | default('') | trim }}"
     iw_upgrade_alter_count: "{{ iw_upgrade_settle.stdout | default('0') | trim }}"
     iw_upgrade_install_seconds: "{{ (iw_upgrade_ts_end.stdout | default('0') | int) - (iw_upgrade_ts_start.stdout | default('0') | int) }}"
 

@@ -9,3 +9,6 @@ reports/*.json
 
 # Provisioning runtime cache (guest IP from iw_provision)
 inventory/iwupgrade/.generated.yml
+
+# Real secrets (prod SSH target, MySQL passwords)
+inventory/iwupgrade/group_vars/all/vault.yml

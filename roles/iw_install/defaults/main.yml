@@ -15,9 +15,16 @@ iw_icewarpd: "{{ iw_install_dir }}/icewarpd.sh"
 iw_nfr_license: ""
 iw_storage_paths: {}
 
-# Disable the installer's clean-install guards so it can run over an existing
-# install dir (needed for the 14.4-over-14.3 step; harmless for a fresh install).
-iw_install_patch_guards: true
+# The installer's `if [ -d "$SETUP_INSTALL_DIR" -a "$SETUP_CONFIG_FILE_EXISTS" != "0" ]`
+# guard is the upgrade-vs-new-install decision in ask_questions(), not a
+# clean-install abort. Rewriting it to `if false` forces "Performing new
+# install" (UPGRADE=0), which silently skips applying the 14.4 payload over an
+# existing install. With /etc/icewarp/icewarp.conf present, --auto already
+# detects the previous install and chooses the upgrade path, so the patch must
+# stay off for the 14.4-over-14.3 step. Only enable it to bypass the
+# "directory already exists ... information was not found" exit when the config
+# file is genuinely absent.
+iw_install_patch_guards: false
 iw_install_apply_license: true
 iw_install_start_services: true
 

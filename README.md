@@ -161,7 +161,7 @@ playbooks/iw-upgrade-site.yml               full orchestrator
 roles/iw_provision                          vps_vm wrapper + IP discovery + generated inventory
 roles/iw_base                               OS prereqs, hosts, sysctl, firewall
 roles/mysql_fastload                        Percona 8.0 + fast-import drop-in + apply/revert
-roles/iw_install                            pinned installer, guard patch, license (fresh/upgrade)
+roles/iw_install                            pinned installer, auto upgrade detection, license (fresh/upgrade)
 roles/iw_restore                            prod firewall exception, scp pull, import, DB remap
 roles/iw_validate                           account export, iwmon2 config regen, probes
 roles/iw_upgrade                            slow-log capture, run 14.4 installer, settle
@@ -212,6 +212,25 @@ ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml \
 - **Prod safety:** the SSH exception is tagged `iw-upgrade-test` and removed in an
   `always` block; the role asserts its removal. The transfer runs from the guest
   and reaches prod NATed as `185.138.220.201`, so the rule permits that source.
+- **Prod access model:** prod is reached as the operator account (e.g.
+  `beranek`), not root. Root is obtained the way production hosts expect —
+  passwordless only for an allow-list such as
+  `NOPASSWD: /bin/su, /usr/bin/sudo, /bin/bash` (`sudo su -`). The `prod` host
+  therefore sets `ansible_shell_executable: /bin/bash`, so Ansible's `sudo`
+  become runs `sudo -n /bin/bash -c ...` and matches that allow-list instead of
+  asking for a password.
+- **Accounts storage:** IceWarp persists accounts in an embedded
+  `config/accounts.db` on a fresh install and refuses to switch to MySQL while
+  that file exists (the ODBC/PDO settings silently revert to `sqlite:`).
+  `iw_restore` removes `config/accounts.db` and `accounts.migrated` (with
+  IceWarp stopped) before setting the connection string, after which IceWarp
+  adopts the restored MySQL `acc` database.
+- **Installer selection:** the 14.4-over-14.3 step relies on the installer's own
+  `--auto` upgrade detection; the clean-install guard must NOT be patched (that
+  guard is the upgrade-vs-new decision, and forcing it makes the installer
+  re-install without applying the 14.4 payload). The installer script is located
+  inside the target package's extracted directory, so older extracted versions
+  in the download dir are never picked up.
 - **Missing dumps:** component types (`acc/asp/grw/dc/eas/wc`) are parsed from
   the backup filename and absent types are skipped; the accounts (`acc`) dump is
   required. The webclient dump is disabled in the current production backup

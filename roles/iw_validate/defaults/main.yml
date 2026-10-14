@@ -15,3 +15,8 @@ iwmon2_monitored_accounts: []
 
 iwmon2_wait_retries: 60
 iwmon2_wait_delay_sec: 10
+
+# The iwmon2 `tool web` probe builds a relative impersonation URL on some
+# builds and fails regardless of the restored data; keep it a recorded check by
+# default. Set true to make it a hard failure.
+iw_validate_assert_web_probe: false

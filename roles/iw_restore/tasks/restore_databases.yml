@@ -181,6 +181,20 @@
   changed_when: true
   become: true
 
+- name: Remove the embedded accounts store so IceWarp uses the restored MySQL database
+  # IceWarp refuses to switch the accounts storage away from its embedded
+  # accounts.db while that file is present (it silently reverts
+  # c_system_storage_accounts_odbcconnstring/_pdo back to sqlite). Removing the
+  # embedded store (with IceWarp stopped) lets the connection string below take
+  # effect; IceWarp rebuilds it as a cache once it talks to MySQL.
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ iw_config_dir }}/accounts.db"
+    - "{{ iw_config_dir }}/accounts.migrated"
+  become: true
+
 - name: Point IceWarp at the restored databases
   ansible.builtin.command:
     argv: "{{ ['sh', iw_tool_cmd, 'set', 'system', item.key, item.value] }}"

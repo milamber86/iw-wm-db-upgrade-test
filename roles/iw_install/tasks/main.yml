@@ -63,9 +63,18 @@
   become: true
   when: iw_install_needed | bool
 
+- name: Derive the extracted package directory
+  ansible.builtin.set_fact:
+    iw_install_extract_dir: >-
+      {{ iw_download_dir }}/{{ (iw_install_url | basename) | regex_replace('(\.tar\.gz|\.tgz|\.tar)$', '') }}
+  when: iw_install_needed | bool
+
 - name: Locate the installer script
+  # Scope the search to THIS package's extracted directory. iw_download_dir keeps
+  # earlier versions too, and a bare recursive find returns the oldest match
+  # (e.g. the 14.3 install.sh), which silently re-installs the old version.
   ansible.builtin.find:
-    paths: "{{ iw_download_dir }}"
+    paths: "{{ iw_install_extract_dir }}"
     patterns: install.sh
     recurse: true
     file_type: file
@@ -75,7 +84,7 @@
 
 - name: Fail when no installer was found
   ansible.builtin.fail:
-    msg: "install.sh not found under {{ iw_download_dir }} after extracting {{ iw_install_url }}"
+    msg: "install.sh not found under {{ iw_install_extract_dir }} after extracting {{ iw_install_url }}"
   when:
     - iw_install_needed | bool
     - iw_installer_find.matched == 0

@@ -27,10 +27,19 @@ vault_mysql_root_password: change-me-root
 vault_mysql_iw_password: change-me-iwdb
 
 # --- production backup host -------------------------------------------------
-vault_prod_ssh_host: prod.example.com
-vault_prod_ssh_user: root
-# Either a control-node key path...
-vault_prod_ssh_private_key_file: ""
+# The real (not-yet-production) server that holds the bck_db_*.sql.gz dumps,
+# e.g. icewarp.onice.io. Log in as the human operator account with the existing
+# key; do NOT use root. Root is reached the way real production hosts expect:
+# the account may only run a few commands passwordless, e.g.
+#   (ALL : ALL) NOPASSWD: /bin/su, /usr/bin/sudo, /bin/bash
+# so `sudo su -` works but arbitrary `sudo <cmd>` does not. The inventory sets
+# ansible_shell_executable: /bin/bash for this host so the delegated firewall
+# tasks elevate through that allow-list.
+vault_prod_ssh_host: icewarp.onice.io
+vault_prod_ssh_user: beranek
+# Either a control-node key path (used both to reach prod and, staged, to let
+# the guest pull the dumps)...
+vault_prod_ssh_private_key_file: ~/.ssh/id_ecdsa
 # ...or inline key material.
 vault_prod_ssh_private_key: ""
 # Directory that holds the `bck_db_*.sql.gz` dumps (defaults to /mnt/data/backup).
