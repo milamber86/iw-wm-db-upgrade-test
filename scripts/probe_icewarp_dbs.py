@@ -394,6 +394,7 @@ def build_report(args):
     report = {
         "schema_version": 1,
         "generated_at": args.generated_at or iso_utc(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+        "instance": args.instance or args.inventory_hostname or args.host_label or "",
         "host": args.host_label or "",
         "inventory_hostname": args.inventory_hostname or "",
         "probe": {
@@ -482,6 +483,7 @@ def main(argv=None):
         help="estimate uses information_schema.TABLE_ROWS; exact runs COUNT(*) per table",
     )
     parser.add_argument("--host-label", default="", help="display host for the report")
+    parser.add_argument("--instance", default="", help="instance short name for the report")
     parser.add_argument("--inventory-hostname", default="")
     parser.add_argument("--generated-at", default="", help="override the generated_at stamp")
     parser.add_argument("--out", default="", help="also write the JSON to this path")

@@ -66,6 +66,7 @@ def instance_summary(data):
     top_rows = max(databases, key=lambda d: (d.get("top_row_count", 0), d.get("name", ""))) if databases else None
     top_data = max(databases, key=lambda d: (d.get("top_data_bytes", 0), d.get("name", ""))) if databases else None
     return {
+        "instance": data.get("instance") or data.get("inventory_hostname") or data.get("host") or "",
         "host": data.get("host") or data.get("inventory_hostname") or "",
         "inventory_hostname": data.get("inventory_hostname") or "",
         "mysql_version": (data.get("mysql") or {}).get("version", ""),
@@ -124,6 +125,7 @@ def build_overview(instances, stamp):
         for db in summary["database_detail"]:
             flat.append(
                 {
+                    "instance": summary["instance"],
                     "host": summary["host"],
                     "inventory_hostname": summary["inventory_hostname"],
                     "database": db["name"],
@@ -141,10 +143,10 @@ def build_overview(instances, stamp):
             )
 
     by_rows = sorted(
-        flat, key=lambda r: (-r["top_row_count"], r["host"], r["database"])
+        flat, key=lambda r: (-r["top_row_count"], r["instance"], r["database"])
     )
     by_data = sorted(
-        flat, key=lambda r: (-r["top_data_bytes"], r["host"], r["database"])
+        flat, key=lambda r: (-r["top_data_bytes"], r["instance"], r["database"])
     )
     return {
         "schema_version": 1,
@@ -155,6 +157,7 @@ def build_overview(instances, stamp):
         "rankings": {
             "by_top_row_count": [
                 {
+                    "instance": r["instance"],
                     "host": r["host"],
                     "inventory_hostname": r["inventory_hostname"],
                     "database": r["database"],
@@ -166,6 +169,7 @@ def build_overview(instances, stamp):
             ],
             "by_top_data_size": [
                 {
+                    "instance": r["instance"],
                     "host": r["host"],
                     "inventory_hostname": r["inventory_hostname"],
                     "database": r["database"],
@@ -189,7 +193,7 @@ def render_markdown(overview):
         % (
             overview["generated_at"],
             overview["instance_count"],
-            ", ".join("`%s`" % i["host"] for i in instances) or "none",
+            ", ".join("`%s`" % i["instance"] for i in instances) or "none",
         )
     )
     lines.append("")
@@ -213,7 +217,7 @@ def render_markdown(overview):
         lines.append(
             "| `%s` | `%s` | %s | %d | %d | %s | %s | %s | %s | %s |"
             % (
-                inst["inventory_hostname"] or inst["host"],
+                inst["instance"],
                 inst["host"],
                 inst["mysql_version"] or "n/a",
                 inst["databases"],
@@ -235,7 +239,7 @@ def render_markdown(overview):
                 "| %d | `%s` | `%s` | %s | `%s` | %s |"
                 % (
                     idx,
-                    row["inventory_hostname"] or row["host"],
+                    row["instance"],
                     row["database"],
                     row["component"],
                     row["table"] or "-",
@@ -274,7 +278,7 @@ def render_markdown(overview):
         lines.append(
             "| `%s` | %s | %d | %s | %s | %s | %d | %s | %s |"
             % (
-                inst["inventory_hostname"] or inst["host"],
+                inst["instance"],
                 lb["stamp"] or "n/a",
                 lb["count"],
                 human_bytes(lb["total_bytes"]),
@@ -300,7 +304,7 @@ def render_markdown(overview):
             lines.append(
                 "| `%s` | `%s` | %s | %d | %s | %s | %s | `%s` | %s | `%s` | %s |"
                 % (
-                    inst["inventory_hostname"] or inst["host"],
+                    inst["instance"],
                     db["name"],
                     db["component"],
                     db["table_count"],

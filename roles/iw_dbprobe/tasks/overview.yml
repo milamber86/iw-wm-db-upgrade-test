@@ -30,6 +30,6 @@
 - name: Report the overview artifact locations
   ansible.builtin.debug:
     msg:
-      - "Instances probed: {{ ansible_play_hosts_all | join(', ') }}"
+      - "Instances probed: {{ ansible_play_hosts_all | map('extract', hostvars, 'iw_dbprobe_instance') | list | join(', ') }}"
       - "Overview (Markdown): {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_md_name }}"
       - "Overview (JSON):     {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_json_name }}"

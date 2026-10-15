@@ -302,7 +302,10 @@ ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml -e iw_dbprobe_
 Output (under `reports/`, git-ignored):
 
 - `db_probe_<instance>_<stamp>.json` — one per probed server: every table with
-  rows/data/index bytes, per-database totals and the newest backup set.
+  rows/data/index bytes, per-database totals and the newest backup set. The
+  `<instance>` short name is the first hostname label for hosts under `onice.io`
+  (`icewarp.onice.io` -> `icewarp`); other hosts keep the full name
+  (`mail.icewarp.com`).
 - `db_probe_overview_<stamp>.json` / `.md` — the combined overview. It ranks the
   probed instances **by per-database top row count** (the largest table in each
   IceWarp database) and **by per-database top data size**, and lists each

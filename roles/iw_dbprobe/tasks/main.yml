@@ -27,6 +27,16 @@
     iw_dbprobe_stamp: "{{ hostvars['localhost'].iw_dbprobe_stamp }}"
     iw_dbprobe_generated_at: "{{ hostvars['localhost'].iw_dbprobe_generated_at }}"
 
+# Instance short name: the first hostname label under `onice.io`
+# (icewarp.onice.io -> icewarp), otherwise the whole hostname
+# (mail.icewarp.com stays mail.icewarp.com).
+- name: Derive the instance short name
+  ansible.builtin.set_fact:
+    iw_dbprobe_instance: >-
+      {{ (ansible_host | default(inventory_hostname)).split('.')[0]
+         if (ansible_host | default(inventory_hostname)).endswith('onice.io')
+         else (ansible_host | default(inventory_hostname)) }}
+
 - name: Build the optional database filter arguments
   ansible.builtin.set_fact:
     iw_dbprobe_extra_args: >-
@@ -44,6 +54,7 @@
       --account-glob {{ iw_dbprobe_account_glob }}
       --db-pattern {{ iw_dbprobe_db_pattern }}
       --row-count-mode {{ iw_dbprobe_row_count_mode }}
+      --instance {{ iw_dbprobe_instance }}
       --host-label {{ ansible_host | default(inventory_hostname) }}
       --inventory-hostname {{ inventory_hostname }}
       --generated-at {{ iw_dbprobe_generated_at }}
@@ -69,7 +80,7 @@
 - name: Report the probed instance
   ansible.builtin.debug:
     msg: >-
-      {{ inventory_hostname }}: databases={{ iw_dbprobe_probe_totals.databases | default(0) }},
+      {{ iw_dbprobe_instance }} ({{ inventory_hostname }}): databases={{ iw_dbprobe_probe_totals.databases | default(0) }},
       tables={{ iw_dbprobe_probe_totals.table_count | default(0) }},
       rows={{ iw_dbprobe_probe_totals.row_count | default(0) }},
       report={{ iw_dbprobe_saved_path }}

@@ -37,7 +37,12 @@ iw_dbprobe_become: true
 iw_dbprobe_stamp: ""
 iw_dbprobe_generated_at: ""
 
-iw_dbprobe_json_name: "db_probe_{{ inventory_hostname }}_{{ iw_dbprobe_stamp }}.json"
+# Instance short name for filenames/reports. Derived per host in tasks/main.yml:
+# the first hostname label when the host is under `onice.io` (icewarp.onice.io ->
+# icewarp), otherwise the full hostname (mail.icewarp.com).
+iw_dbprobe_instance: ""
+
+iw_dbprobe_json_name: "db_probe_{{ iw_dbprobe_instance }}_{{ iw_dbprobe_stamp }}.json"
 iw_dbprobe_json_path: "{{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_json_name }}"
 iw_dbprobe_overview_json_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.json"
 iw_dbprobe_overview_md_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.md"
