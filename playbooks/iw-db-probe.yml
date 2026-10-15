@@ -1,0 +1,17 @@
+---
+# Read-only probe of IceWarp databases and the newest backups.
+#
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml --limit onice
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml -e iw_dbprobe_row_count_mode=exact
+#
+# For every host in the `probes` group it writes one JSON report under reports/
+# and then a combined overview (Markdown + JSON) that ranks the instances by the
+# largest table row count and the largest table data size in each IceWarp
+# database. Nothing is written to the probed hosts; only read-only SQL runs.
+
+- name: Probe IceWarp databases and backups (read-only)
+  hosts: probes
+  gather_facts: false
+  roles:
+    - role: iw_dbprobe

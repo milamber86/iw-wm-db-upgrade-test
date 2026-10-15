@@ -156,6 +156,15 @@ prod_ssh_key_on_target: /root/.ssh/iw_prod_key
 prod_db_names_override: {}
 
 # ---------------------------------------------------------------------------
+# Read-only database/backup probe (roles/iw_dbprobe, playbooks/iw-db-probe.yml)
+# ---------------------------------------------------------------------------
+# Probed servers are the `probes` group in hosts.yml (the production hosts plus
+# the test cloud server `onice`). The probe reads each server's `/root/.my.cnf`,
+# so it uses `become` on the production hosts and connects as root on `onice`.
+onice_ssh_private_key_file: "{{ vault_onice_ssh_private_key_file | default('~/.ssh/id_ecdsa') }}"
+iw_dbprobe_backup_dir: "{{ prod_backup_dir | default('/mnt/data/backup') }}"
+
+# ---------------------------------------------------------------------------
 # Upgrade timing capture
 # ---------------------------------------------------------------------------
 iw_upgrade_settle_timeout_sec: 3600

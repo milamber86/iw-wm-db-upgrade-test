@@ -1,0 +1,35 @@
+---
+# Build the combined overview from the per-server reports produced in this play.
+# Included from tasks/main.yml with run_once + delegate_to: localhost.
+
+- name: Require at least one probed instance
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | default([]) | length > 0
+    fail_msg: >-
+      No probe targets were available. Add hosts to the 'probes' group in
+      inventory/iwupgrade/hosts.yml, or select a subset with --limit.
+
+- name: Collect the per-server report paths
+  ansible.builtin.set_fact:
+    iw_dbprobe_inputs: "{{ ansible_play_hosts_all | map('extract', hostvars, 'iw_dbprobe_saved_path') | list }}"
+
+- name: Compose the summarizer command
+  ansible.builtin.set_fact:
+    iw_dbprobe_overview_argv: >-
+      {{ ['python3', iw_dbprobe_summarizer,
+          '--out-json', iw_dbprobe_reports_dir ~ '/' ~ iw_dbprobe_overview_json_name,
+          '--out-md', iw_dbprobe_reports_dir ~ '/' ~ iw_dbprobe_overview_md_name,
+          '--stamp', iw_dbprobe_generated_at] + iw_dbprobe_inputs }}
+
+- name: Build the combined overview report
+  ansible.builtin.command:
+    argv: "{{ iw_dbprobe_overview_argv }}"
+  changed_when: false
+
+- name: Report the overview artifact locations
+  ansible.builtin.debug:
+    msg:
+      - "Instances probed: {{ ansible_play_hosts_all | join(', ') }}"
+      - "Overview (Markdown): {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_md_name }}"
+      - "Overview (JSON):     {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_json_name }}"

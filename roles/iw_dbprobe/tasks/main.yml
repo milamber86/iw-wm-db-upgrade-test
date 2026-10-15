@@ -1,0 +1,83 @@
+---
+# Collect a read-only IceWarp database + backup report from each probed server,
+# then build the combined overview on the control node. The JSON is produced in
+# memory on the target and saved on the control node, so nothing is written to
+# the target host. Keeping everything in this one play makes --limit work.
+
+- name: Ensure the reports directory exists on the control node
+  ansible.builtin.file:
+    path: "{{ iw_dbprobe_reports_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Record the run timestamps on the control node
+  ansible.builtin.set_fact:
+    iw_dbprobe_stamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+    iw_dbprobe_generated_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  delegate_to: localhost
+  delegate_facts: true
+  become: false
+  run_once: true
+
+- name: Share the run timestamps with the probed hosts
+  ansible.builtin.set_fact:
+    iw_dbprobe_stamp: "{{ hostvars['localhost'].iw_dbprobe_stamp }}"
+    iw_dbprobe_generated_at: "{{ hostvars['localhost'].iw_dbprobe_generated_at }}"
+
+- name: Build the optional database filter arguments
+  ansible.builtin.set_fact:
+    iw_dbprobe_extra_args: >-
+      {{ (iw_dbprobe_db_include | map('regex_replace', '^', '--include-db ') | join(' ')) ~ ' '
+         ~ (iw_dbprobe_db_exclude | map('regex_replace', '^', '--exclude-db ') | join(' ')) }}
+
+- name: Probe IceWarp databases and backups (read-only)
+  ansible.builtin.script:
+    cmd: >-
+      {{ iw_dbprobe_script }}
+      --mysql-bin {{ iw_dbprobe_mysql_bin }}
+      --defaults-file {{ iw_dbprobe_defaults_file }}
+      --backup-dir {{ iw_dbprobe_backup_dir }}
+      --backup-glob {{ iw_dbprobe_backup_glob }}
+      --account-glob {{ iw_dbprobe_account_glob }}
+      --db-pattern {{ iw_dbprobe_db_pattern }}
+      --row-count-mode {{ iw_dbprobe_row_count_mode }}
+      --host-label {{ ansible_host | default(inventory_hostname) }}
+      --inventory-hostname {{ inventory_hostname }}
+      --generated-at {{ iw_dbprobe_generated_at }}
+      {{ iw_dbprobe_extra_args | default('') }}
+  register: iw_dbprobe_raw
+  changed_when: false
+  become: "{{ iw_dbprobe_become }}"
+  failed_when: (iw_dbprobe_raw.rc | default(0)) != 0
+
+- name: Save the per-server probe report on the control node
+  ansible.builtin.copy:
+    content: "{{ iw_dbprobe_raw.stdout }}\n"
+    dest: "{{ iw_dbprobe_json_path }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+
+- name: Record the saved per-server report path
+  ansible.builtin.set_fact:
+    iw_dbprobe_saved_path: "{{ iw_dbprobe_json_path }}"
+    iw_dbprobe_probe_totals: "{{ (iw_dbprobe_raw.stdout | from_json).database_totals | default({}) }}"
+
+- name: Report the probed instance
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: databases={{ iw_dbprobe_probe_totals.databases | default(0) }},
+      tables={{ iw_dbprobe_probe_totals.table_count | default(0) }},
+      rows={{ iw_dbprobe_probe_totals.row_count | default(0) }},
+      report={{ iw_dbprobe_saved_path }}
+
+- name: Build the combined overview report
+  ansible.builtin.include_tasks:
+    file: overview.yml
+    apply:
+      delegate_to: localhost
+      become: false
+  run_once: true

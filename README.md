@@ -166,7 +166,11 @@ roles/iw_restore                            prod firewall exception, scp pull, i
 roles/iw_validate                           account export, iwmon2 config regen, probes
 roles/iw_upgrade                            slow-log capture, run 14.4 installer, settle
 roles/iw_timing                             parse ALTER rows, render the benchmark report
+roles/iw_dbprobe                            read-only DB/backup probe + cross-instance overview
 scripts/parse_alter_timings.py              slow-log TSV -> timings JSON
+scripts/probe_icewarp_dbs.py                read-only DB/backup probe (runs on the target)
+scripts/summarize_db_probe.py               per-server probe JSON -> combined overview
+playbooks/iw-db-probe.yml                   read-only probe of the `probes` group
 files/iw_my_fastload.cnf                    Percona fast-import drop-in
 templates/iwmon2_config.yml.j2              iwmon2 config, accounts from tool.sh export
 ```
@@ -242,4 +246,67 @@ ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml \
 - **iwmon2:** its config is force-regenerated (the stock deploy only re-renders
   when the file is missing or the Prom stack is enabled) and `testmail` is
   derived from the first restored account.
+
+# IceWarp database & backup probe (read-only)
+
+`playbooks/iw-db-probe.yml` logs into every server in the `probes` inventory
+group, connects with the IceWarp DB credentials already on the host
+(`/root/.my.cnf`), and reports — **without modifying anything** — the size and
+row count of every table in every IceWarp database, plus the newest backup set.
+
+The `probes` group in `inventory/iwupgrade/hosts.yml` contains the production
+hosts (via the `production` group) and the test cloud server `onice`
+(`icewarp.onice.io`, reached directly as root). The production hosts are reached
+as the operator account and elevated with the same `sudo` allow-list as the
+restore (`ansible_shell_executable: /bin/bash` + `become: true`), so the probe
+can read `/root/.my.cnf`; `onice` sets `iw_dbprobe_become: false`.
+
+## What it collects
+
+- **Databases:** every IceWarp database, detected as a schema named like
+  `dbiwc*` (`iw_dbprobe_db_pattern`) or containing an IceWarp signature table
+  (`account`, `Users`, `item`, `folder`, `folders`, `mailbox`, `metadata`,
+  `calendars`, `thread`). Override with `iw_dbprobe_db_include` /
+  `iw_dbprobe_db_exclude`.
+- **Tables:** for every base table, the estimated row count and the accurate
+  `DATA_LENGTH` / `INDEX_LENGTH` / `DATA_FREE` byte counters, plus per-database
+  totals and the top table by rows and by data.
+- **Backups:** the newest `bck_db_<type>_<db><stamp>.sql.gz` set under
+  `iw_dbprobe_backup_dir` (default `/mnt/data/backup`), each file's size and how
+  it compares to the matching database, the newest `bck_acc_*.csv` account
+  export, the newest-set timestamp/age and how many sets are kept.
+- **MySQL:** server version and the endpoint (`host`/`port`) from the option
+  file. The client **user and password are never read or reported**.
+
+## Read-only guarantees
+
+The probe only issues `SELECT`s: `information_schema` queries and, with
+`-e iw_dbprobe_row_count_mode=exact`, one `COUNT(*)` per table (still read-only,
+but it scans each table — use `estimate`, the default, for large instances). It
+never writes to databases, config, services or backups, and the JSON is built in
+memory on the target and saved on the control node.
+
+## Run
+
+```bash
+# Probe every host in the `probes` group
+ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml
+
+# One host only
+ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml --limit onice
+
+# Exact COUNT(*) instead of information_schema estimates
+ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml -e iw_dbprobe_row_count_mode=exact
+```
+
+Output (under `reports/`, git-ignored):
+
+- `db_probe_<instance>_<stamp>.json` — one per probed server: every table with
+  rows/data/index bytes, per-database totals and the newest backup set.
+- `db_probe_overview_<stamp>.json` / `.md` — the combined overview. It ranks the
+  probed instances **by per-database top row count** (the largest table in each
+  IceWarp database) and **by per-database top data size**, and lists each
+  instance's latest backup set. Full per-table detail stays in the per-server
+  JSON.
+
 

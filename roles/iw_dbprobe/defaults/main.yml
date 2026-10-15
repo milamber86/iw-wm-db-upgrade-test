@@ -1,0 +1,43 @@
+---
+# Read-only IceWarp database/backup probe (roles/iw_dbprobe).
+#
+# The probe connects with the IceWarp DB credentials already present on each
+# server (`/root/.my.cnf` by default), reads `information_schema` and stats the
+# newest backup set, and writes one JSON report per server plus a combined
+# overview. It never writes to the target databases, config or backups.
+
+# Scripts shipped in the repo (scripts/*.py).
+iw_dbprobe_script: "{{ playbook_dir }}/../scripts/probe_icewarp_dbs.py"
+iw_dbprobe_summarizer: "{{ playbook_dir }}/../scripts/summarize_db_probe.py"
+iw_dbprobe_reports_dir: "{{ playbook_dir }}/../reports"
+
+# Read-only connection: the option file already on the server.
+iw_dbprobe_mysql_bin: mysql
+iw_dbprobe_defaults_file: /root/.my.cnf
+
+# IceWarp databases: matched by name pattern or by an IceWarp signature table;
+# include overrides the pattern, exclude always wins unless explicitly included.
+iw_dbprobe_db_pattern: "^dbiwc"
+iw_dbprobe_db_include: []
+iw_dbprobe_db_exclude: []
+
+# Backup source and the newest-set selection.
+iw_dbprobe_backup_dir: /mnt/data/backup
+iw_dbprobe_backup_glob: "bck_db_*.sql.gz"
+iw_dbprobe_account_glob: "bck_acc_*.csv"
+
+# estimate = information_schema.TABLE_ROWS (fast, non-invasive); exact = COUNT(*).
+iw_dbprobe_row_count_mode: estimate
+
+# Elevate to read /root/.my.cnf. Set iw_dbprobe_become: false on hosts where the
+# login user already is root (inventory host var wins over this default).
+iw_dbprobe_become: true
+
+# Run stamp (set by the playbook on localhost, shared by every probed host).
+iw_dbprobe_stamp: ""
+iw_dbprobe_generated_at: ""
+
+iw_dbprobe_json_name: "db_probe_{{ inventory_hostname }}_{{ iw_dbprobe_stamp }}.json"
+iw_dbprobe_json_path: "{{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_json_name }}"
+iw_dbprobe_overview_json_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.json"
+iw_dbprobe_overview_md_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.md"

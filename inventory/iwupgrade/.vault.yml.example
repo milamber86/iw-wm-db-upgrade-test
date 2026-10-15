@@ -44,3 +44,8 @@ vault_prod_ssh_private_key_file: ~/.ssh/id_ecdsa
 vault_prod_ssh_private_key: ""
 # Directory that holds the `bck_db_*.sql.gz` dumps (defaults to /mnt/data/backup).
 vault_prod_backup_dir: /mnt/data/backup
+
+# --- probed test cloud server (roles/iw_dbprobe) ----------------------------
+# The read-only database/backup probe (playbooks/iw-db-probe.yml) reaches the
+# test cloud server directly as root; override the control-node key path here.
+vault_onice_ssh_private_key_file: ~/.ssh/id_ecdsa

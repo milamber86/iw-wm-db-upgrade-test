@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: iw_dbprobe
+  author: iw-wm-db-upgrade-test
+  description: Read-only probe of IceWarp database sizes/row counts and the latest backups.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []
