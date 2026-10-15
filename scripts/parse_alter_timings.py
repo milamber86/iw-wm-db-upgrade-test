@@ -7,13 +7,16 @@ Instead the MySQL slow log is enabled with ``log_output=TABLE``,
 ``log_slow_admin_statements=ON`` and ``long_query_time=0``; this script reads the
 ``mysql.slow_log`` rows (exported as TSV) and reports per-statement durations.
 
-Input format (``--format tsv``, default): tab-separated rows with three columns
+Input format (``--format tsv``, default): tab-separated rows with four columns
 
-    start_time<TAB>query_time<TAB>sql_text
+    start_time<TAB>query_time<TAB>db<TAB>sql_text
 
 ``start_time`` is a ``DATETIME(6)`` string and ``query_time`` is a MySQL
-``TIME(6)`` string (``HH:MM:SS.ffffff``). Rows whose ``sql_text`` is not an
-``ALTER TABLE`` statement are ignored.
+``TIME(6)`` string (``HH:MM:SS.ffffff``); ``db`` is the slow-log default database
+(the database the unqualified ``ALTER TABLE`` ran in, or ``NULL``). Rows whose
+``sql_text`` is not an ``ALTER TABLE`` statement are ignored. The older
+three-column layout (``start_time<TAB>query_time<TAB>sql_text``) is still
+accepted; the database is then taken from a ``db.table`` qualifier when present.
 
 Output JSON (stdout and optional ``--out``)::
 
@@ -25,8 +28,8 @@ Output JSON (stdout and optional ``--out``)::
       "avg_seconds": 28.8,
       "first_start": "2026-10-13 14:00:00.000000",
       "last_start": "2026-10-13 14:05:45.000000",
-      "by_table": [{"table": "item", "count": 2, ...}],
-      "statements": [{"statement": "...", "table": "item",
+      "by_table": [{"db": "dbiwc1wc", "table": "item", "count": 2, ...}],
+      "statements": [{"statement": "...", "db": "dbiwc1wc", "table": "item",
                       "start_time": "...", "duration_sec": 12.3}]
     }
 """
@@ -41,7 +44,20 @@ ALTER_RE = re.compile(
     r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`\"']?([A-Za-z0-9_$.]+)",
     re.IGNORECASE,
 )
+# Matches an explicit `db`.`table` qualifier on the ALTER target.
+ALTER_TARGET_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?"
+    r"(?:[`\"']?([A-Za-z0-9_$]+)[`\"']?\s*\.\s*)?"
+    r"[`\"']?([A-Za-z0-9_$]+)",
+    re.IGNORECASE,
+)
 TIME_RE = re.compile(r"^-?(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$")
+
+
+def _clean_db(value):
+    """Normalise a slow-log ``db`` value (empty string / ``NULL`` -> ``""``)."""
+    value = (value or "").strip()
+    return "" if value.upper() == "NULL" else value
 
 
 def parse_query_time(value):
@@ -60,8 +76,13 @@ def parse_query_time(value):
 
 
 def extract_table(sql):
-    match = ALTER_RE.match(sql or "")
-    return match.group(1) if match else ""
+    match = ALTER_TARGET_RE.match(sql or "")
+    return match.group(2) if match else ""
+
+
+def extract_db_from_sql(sql):
+    match = ALTER_TARGET_RE.match(sql or "")
+    return match.group(1) if match and match.group(1) else ""
 
 
 def read_rows(path, fmt):
@@ -89,11 +110,20 @@ def _read_tsv_rows(stream):
         parts = line.split("\t")
         if len(parts) < 3:
             continue
+        if len(parts) >= 4:
+            # start_time <TAB> query_time <TAB> db <TAB> sql_text
+            start_time, query_time, db = parts[0], parts[1], parts[2]
+            sql_text = "\t".join(parts[3:])
+        else:
+            # Legacy three-column layout: no db column.
+            start_time, query_time = parts[0], parts[1]
+            db, sql_text = "", parts[2]
         rows.append(
             {
-                "start_time": parts[0].strip(),
-                "query_time": parts[1].strip(),
-                "sql_text": "\t".join(parts[2:]).strip(),
+                "start_time": start_time.strip(),
+                "query_time": query_time.strip(),
+                "db": _clean_db(db),
+                "sql_text": sql_text.strip(),
             }
         )
     return rows
@@ -109,6 +139,7 @@ def _read_json_rows(stream):
             {
                 "start_time": entry.get("start_time", ""),
                 "query_time": entry.get("query_time", entry.get("duration_sec", 0)),
+                "db": _clean_db(entry.get("db", entry.get("database", ""))),
                 "sql_text": entry.get("sql_text", entry.get("statement", "")),
             }
         )
@@ -133,9 +164,11 @@ def aggregate(rows, since, until):
         if not within_window(start, since, until):
             continue
         duration = parse_query_time(row["query_time"])
+        db = row.get("db") or extract_db_from_sql(sql)
         statements.append(
             {
                 "statement": sql,
+                "db": db,
                 "table": extract_table(sql),
                 "start_time": start,
                 "duration_sec": round(duration, 6),
@@ -146,9 +179,18 @@ def aggregate(rows, since, until):
 
     by_table = {}
     for item in statements:
-        key = item["table"] or "(unknown)"
+        db = item["db"] or "(unknown)"
+        table = item["table"] or "(unknown)"
+        key = (db, table)
         entry = by_table.setdefault(
-            key, {"table": key, "count": 0, "total_seconds": 0.0, "max_seconds": 0.0}
+            key,
+            {
+                "db": db,
+                "table": table,
+                "count": 0,
+                "total_seconds": 0.0,
+                "max_seconds": 0.0,
+            },
         )
         entry["count"] += 1
         entry["total_seconds"] += item["duration_sec"]

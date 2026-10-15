@@ -63,10 +63,10 @@ the capture window below; install wall-clock time is measured separately.
 {% if (t.statements | default([])) | length == 0 %}
 _No `ALTER TABLE` statements were captured in the window._
 {% else %}
-| # | Table | Start | Duration |
-|---|-------|-------|----------|
+| # | Database | Table | Start | Duration | Statement |
+|---|----------|-------|-------|----------|-----------|
 {% for st in t.statements | default([]) %}
-| {{ loop.index }} | `{{ st.table | default('(unknown)') }}` | {{ st.start_time }} | {{ human_seconds(st.duration_sec) }} |
+| {{ loop.index }} | `{{ st.db | default('(unknown)') }}` | `{{ st.table | default('(unknown)') }}` | {{ st.start_time }} | {{ human_seconds(st.duration_sec) }} | `{{ st.statement | default('') | replace('|', '\\|') }}` |
 {% endfor %}
 {% endif %}
 
@@ -75,10 +75,10 @@ _No `ALTER TABLE` statements were captured in the window._
 {% if (t.by_table | default([])) | length == 0 %}
 _No per-table aggregation available._
 {% else %}
-| Table | ALTERs | Total | Slowest |
-|-------|--------|-------|---------|
+| Database | Table | ALTERs | Total | Slowest |
+|----------|-------|--------|-------|---------|
 {% for row in t.by_table | default([]) %}
-| `{{ row.table }}` | {{ row.count }} | {{ human_seconds(row.total_seconds) }} | {{ human_seconds(row.max_seconds) }} |
+| `{{ row.db | default('(unknown)') }}` | `{{ row.table }}` | {{ row.count }} | {{ human_seconds(row.total_seconds) }} | {{ human_seconds(row.max_seconds) }} |
 {% endfor %}
 {% endif %}
 

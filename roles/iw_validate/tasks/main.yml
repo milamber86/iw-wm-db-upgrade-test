@@ -100,14 +100,17 @@
   until: >-
     ('"Smtp": 220' in (iwmon2_stat.stdout | default('')))
     and ('"Imap": 1' in (iwmon2_stat.stdout | default('')))
-    and ('"Xmpp": 1' in (iwmon2_stat.stdout | default('')))
+    and ('"Web": 200' in (iwmon2_stat.stdout | default('')))
   retries: "{{ iwmon2_wait_retries }}"
   delay: "{{ iwmon2_wait_delay_sec }}"
   changed_when: false
   failed_when: false
   become: true
 
-- name: Require SMTP, IMAP and XMPP to be up
+- name: Require the core mail services (SMTP, IMAP, Web) to be up
+  # A restored production configuration may legitimately run without the
+  # optional services (XMPP / EAS / Groupware) — a stat value of -1 for those is
+  # expected and not a restore failure. Only the core mail stack must be up.
   ansible.builtin.assert:
     that:
       - >-
@@ -115,8 +118,16 @@
       - >-
         '"Imap": 1' in (iwmon2_stat.stdout | default(''))
       - >-
-        '"Xmpp": 1' in (iwmon2_stat.stdout | default(''))
-    fail_msg: "IceWarp service check failed: {{ iwmon2_stat.stdout | default('') | truncate(500) }}"
+        '"Web": 200' in (iwmon2_stat.stdout | default(''))
+    fail_msg: "IceWarp core service check failed: {{ iwmon2_stat.stdout | default('') | truncate(500) }}"
+
+- name: Report optional IceWarp services (XMPP / EAS / Groupware)
+  ansible.builtin.debug:
+    msg: >-
+      Optional services may be disabled in the restored configuration (stat
+      value -1, expected). XMPP={{ '"Xmpp": 1' in (iwmon2_stat.stdout | default('')) }},
+      EAS={{ '"Eas": 1' in (iwmon2_stat.stdout | default('')) }},
+      Groupware={{ '"Grw": 1' in (iwmon2_stat.stdout | default('')) }}.
 
 - name: Probe the IceWarp web stack through iwmon2
   ansible.builtin.shell: "cd {{ iwmon2_dir }} && ./iwmon2 tool web"

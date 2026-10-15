@@ -11,7 +11,7 @@
     dest: "{{ iw_log_dir }}/alter_query.sql"
     mode: "0644"
     content: |
-      SELECT start_time, query_time,
+      SELECT start_time, query_time, db,
              REPLACE(REPLACE(sql_text, '\t', ' '), '\n', ' ')
       FROM mysql.slow_log
       WHERE sql_text LIKE 'ALTER TABLE%'
