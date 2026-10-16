@@ -10,9 +10,30 @@
       No probe targets were available. Add hosts to the 'probes' group in
       inventory/iwupgrade/hosts.yml, or select a subset with --limit.
 
+- name: Select the instances that produced a report
+  ansible.builtin.set_fact:
+    iw_dbprobe_ok_hosts: >-
+      {{ ansible_play_hosts_all | map('extract', hostvars)
+         | selectattr('iw_dbprobe_saved_path', 'defined')
+         | map(attribute='inventory_hostname') | list }}
+
+- name: List the instances without a report
+  ansible.builtin.set_fact:
+    iw_dbprobe_failed_instances: >-
+      {{ (ansible_play_hosts_all | difference(iw_dbprobe_ok_hosts))
+         | map('extract', hostvars, 'iw_dbprobe_instance') | list }}
+
+- name: Require at least one report
+  ansible.builtin.assert:
+    that:
+      - iw_dbprobe_ok_hosts | length > 0
+    fail_msg: >-
+      No instance produced a probe report
+      ({{ iw_dbprobe_failed_instances | join(', ') }} failed).
+
 - name: Collect the per-server report paths
   ansible.builtin.set_fact:
-    iw_dbprobe_inputs: "{{ ansible_play_hosts_all | map('extract', hostvars, 'iw_dbprobe_saved_path') | list }}"
+    iw_dbprobe_inputs: "{{ iw_dbprobe_ok_hosts | map('extract', hostvars, 'iw_dbprobe_saved_path') | list }}"
 
 - name: Compose the summarizer command
   ansible.builtin.set_fact:
@@ -20,7 +41,8 @@
       {{ ['python3', iw_dbprobe_summarizer,
           '--out-json', iw_dbprobe_reports_dir ~ '/' ~ iw_dbprobe_overview_json_name,
           '--out-md', iw_dbprobe_reports_dir ~ '/' ~ iw_dbprobe_overview_md_name,
-          '--stamp', iw_dbprobe_generated_at] + iw_dbprobe_inputs }}
+          '--stamp', iw_dbprobe_generated_at,
+          '--failed-instances', iw_dbprobe_failed_instances | join(',')] + iw_dbprobe_inputs }}
 
 - name: Build the combined overview report
   ansible.builtin.command:
@@ -30,6 +52,6 @@
 - name: Report the overview artifact locations
   ansible.builtin.debug:
     msg:
-      - "Instances probed: {{ ansible_play_hosts_all | map('extract', hostvars, 'iw_dbprobe_instance') | list | join(', ') }}"
+      - "Instances with a report: {{ iw_dbprobe_ok_hosts | length }}; without a report: {{ iw_dbprobe_failed_instances | length }}"
       - "Overview (Markdown): {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_md_name }}"
       - "Overview (JSON):     {{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_overview_json_name }}"

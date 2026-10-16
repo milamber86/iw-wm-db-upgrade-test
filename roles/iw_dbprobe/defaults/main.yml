@@ -44,5 +44,9 @@ iw_dbprobe_instance: ""
 
 iw_dbprobe_json_name: "db_probe_{{ iw_dbprobe_instance }}_{{ iw_dbprobe_stamp }}.json"
 iw_dbprobe_json_path: "{{ iw_dbprobe_reports_dir }}/{{ iw_dbprobe_json_name }}"
+# The report is written on the target (so SSH banners/stdio cannot corrupt it)
+# and fetched back. /tmp is used because the operator user must be able to walk
+# into it if become is not available.
+iw_dbprobe_remote_json: "/tmp/{{ iw_dbprobe_json_name }}"
 iw_dbprobe_overview_json_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.json"
 iw_dbprobe_overview_md_name: "db_probe_overview_{{ iw_dbprobe_stamp }}.md"

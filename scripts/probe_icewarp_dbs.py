@@ -35,6 +35,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -396,6 +397,7 @@ def build_report(args):
         "generated_at": args.generated_at or iso_utc(datetime.datetime.now(datetime.timezone.utc).timestamp()),
         "instance": args.instance or args.inventory_hostname or args.host_label or "",
         "host": args.host_label or "",
+        "address": args.address or "",
         "inventory_hostname": args.inventory_hostname or "",
         "probe": {
             "mysql_bin": args.mysql_bin,
@@ -407,6 +409,11 @@ def build_report(args):
             "backup_dir": args.backup_dir,
             "backup_glob": args.backup_glob,
         },
+        "env": {
+            "mysql_client": shutil.which(args.mysql_bin) or "",
+            "defaults_file_present": os.path.isfile(args.defaults_file),
+            "backup_dir_present": os.path.isdir(args.backup_dir),
+        },
         "mysql": {
             "version": "",
             "server_hostname": "",
@@ -417,6 +424,7 @@ def build_report(args):
         "database_totals": {},
         "backups": {},
         "errors": [],
+        "ok": True,
     }
 
     try:
@@ -433,17 +441,21 @@ def build_report(args):
         report["errors"].append("metadata: %s" % exc)
         log("metadata query failed: %s" % exc)
 
-    schemas = list_schemas(args.mysql_bin, args.defaults_file)
-    signature = signature_schemas(args.mysql_bin, args.defaults_file)
-    databases = select_databases(
-        schemas, signature, args.db_pattern, args.include_db, args.exclude_db
-    )
-    log("schemas=%d selected=%d" % (len(schemas), len(databases)))
+    try:
+        schemas = list_schemas(args.mysql_bin, args.defaults_file)
+        signature = signature_schemas(args.mysql_bin, args.defaults_file)
+        databases = select_databases(
+            schemas, signature, args.db_pattern, args.include_db, args.exclude_db
+        )
+        log("schemas=%d selected=%d" % (len(schemas), len(databases)))
 
-    by_db = collect_tables(
-        args.mysql_bin, args.defaults_file, databases, args.row_count_mode == "exact"
-    )
-    report["databases"] = [summarize_database(db, by_db.get(db, [])) for db in databases]
+        by_db = collect_tables(
+            args.mysql_bin, args.defaults_file, databases, args.row_count_mode == "exact"
+        )
+        report["databases"] = [summarize_database(db, by_db.get(db, [])) for db in databases]
+    except Exception as exc:  # a broken/unreachable DB still yields a report
+        report["errors"].append("databases: %s" % exc)
+        log("database collection failed: %s" % exc)
 
     db_sizes = dict(
         (entry["name"], entry["total_bytes"]) for entry in report["databases"]
@@ -456,10 +468,39 @@ def build_report(args):
         "index_bytes": sum(e["index_bytes"] for e in report["databases"]),
         "total_bytes": sum(e["total_bytes"] for e in report["databases"]),
     }
-    report["backups"] = collect_backups(
-        args.backup_dir, args.backup_glob, args.account_glob, db_sizes
-    )
+
+    try:
+        report["backups"] = collect_backups(
+            args.backup_dir, args.backup_glob, args.account_glob, db_sizes
+        )
+    except Exception as exc:
+        report["errors"].append("backups: %s" % exc)
+        log("backup collection failed: %s" % exc)
+
+    report["ok"] = not report["errors"]
     return report
+
+
+def fatal_report(args, message):
+    return {
+        "schema_version": 1,
+        "generated_at": args.generated_at or iso_utc(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+        "instance": args.instance or args.inventory_hostname or args.host_label or "",
+        "host": args.host_label or "",
+        "address": args.address or "",
+        "inventory_hostname": args.inventory_hostname or "",
+        "env": {
+            "mysql_client": shutil.which(args.mysql_bin) or "",
+            "defaults_file_present": os.path.isfile(args.defaults_file),
+            "backup_dir_present": os.path.isdir(args.backup_dir),
+        },
+        "mysql": {"version": "", "server_hostname": "", "server_port": "", "endpoint": read_option_file(args.defaults_file)},
+        "databases": [],
+        "database_totals": {},
+        "backups": {},
+        "errors": [message],
+        "ok": False,
+    }
 
 
 def main(argv=None):
@@ -484,6 +525,7 @@ def main(argv=None):
     )
     parser.add_argument("--host-label", default="", help="display host for the report")
     parser.add_argument("--instance", default="", help="instance short name for the report")
+    parser.add_argument("--address", default="", help="connection address/IP for the report")
     parser.add_argument("--inventory-hostname", default="")
     parser.add_argument("--generated-at", default="", help="override the generated_at stamp")
     parser.add_argument("--out", default="", help="also write the JSON to this path")
@@ -496,14 +538,22 @@ def main(argv=None):
     VERBOSE = args.verbose
     args.include_db = [d for d in args.include_db if d]
     args.exclude_db = [d for d in args.exclude_db if d]
-    report = build_report(args)
+    try:
+        report = build_report(args)
+    except Exception as exc:  # never lose the run: emit a report describing the failure
+        log("fatal: %s" % exc)
+        report = fatal_report(args, "fatal: %s" % exc)
+
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.out:
         with open(args.out, "w") as handle:
             handle.write(text)
             handle.write("\n")
-    sys.stdout.write(text)
-    sys.stdout.write("\n")
+    else:
+        # Without --out the JSON goes to stdout. Callers that capture stdout for
+        # the JSON (e.g. Ansible's script module) must not get extra output here.
+        sys.stdout.write(text)
+        sys.stdout.write("\n")
     return 0
 
 

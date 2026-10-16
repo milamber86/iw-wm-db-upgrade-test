@@ -299,6 +299,33 @@ ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml --limit onice
 ansible-playbook -i inventory/iwupgrade playbooks/iw-db-probe.yml -e iw_dbprobe_row_count_mode=exact
 ```
 
+### Real host list
+
+`iw_dbprobe_targets` selects the hosts (default `probes`), so the same playbook
+runs against the real inventory `inventory/iwcloudlist_all.ini`:
+
+```bash
+# canary_group_6 is intentionally excluded (non-public IPs / different SSH)
+ansible-playbook -i inventory/iwcloudlist_all.ini playbooks/iw-db-probe.yml \
+  -e iw_dbprobe_targets='canary_group_1:canary_group_2:canary_group_3:canary_group_4:canary_group_5' \
+  -f 60
+```
+
+`inventory/group_vars/all.yml` (loaded only for that inventory) sets the real
+access model: log in as the operator account `beranek` with the existing key and
+elevate with `sudo su -` (sudoers allows NOPASSWD only for
+`/bin/su, /usr/bin/sudo, /bin/bash`). The probe role elevates only the on-host
+tasks with `become: "{{ iw_dbprobe_become }}"`; a global `ansible_become` would
+make the delegated control-node tasks try to sudo too.
+
+The instance short name comes from the inventory FQDN (`vps_hostname`, else the
+inventory name, else `ansible_host`): hosts under `onice.io` use the first label
+(`support3.onice.io` -> `support3`), everything else keeps the full name
+(`mail.icewarp.com`, `mx.ftcz.net`). The connection IP is recorded as `address`.
+Hosts that cannot be reached (or where the probe cannot run) are listed in the
+overview as "no report"; a per-host DB error is reported in the overview's
+Status column instead of dropping the host.
+
 Output (under `reports/`, git-ignored):
 
 - `db_probe_<instance>_<stamp>.json` — one per probed server: every table with

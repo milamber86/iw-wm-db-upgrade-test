@@ -1,0 +1,21 @@
+---
+# Connection settings for the real IceWarp host list in
+# inventory/iwcloudlist_all.ini (groups canary_group_1 .. canary_group_6 and the
+# datacenter groups). This file is loaded only when that inventory is used.
+#
+# Every host is reached as the operator account `beranek` with the existing key
+# and elevated with `sudo su -`: sudoers allows NOPASSWD only for
+# /bin/su, /usr/bin/sudo, /bin/bash, so arbitrary `sudo <cmd>` is not allowed.
+# Running become through /bin/bash makes Ansible's `sudo -n /bin/bash -c ...`
+# match that allow-list (same model as the `prod` host in iwupgrade).
+ansible_user: beranek
+ansible_ssh_private_key_file: "{{ lookup('env', 'HOME') }}/.ssh/id_ecdsa"
+ansible_shell_executable: /bin/bash
+ansible_become_method: sudo
+ansible_python_interpreter: /usr/bin/python3
+
+# Read-only DB/backup probe defaults for this inventory. The probe role elevates
+# only the on-host tasks (become: "{{ iw_dbprobe_become }}"); do NOT set a global
+# ansible_become here, or the delegated control-node tasks would try to sudo too.
+iw_dbprobe_become: true
+iw_dbprobe_backup_dir: /mnt/data/backup

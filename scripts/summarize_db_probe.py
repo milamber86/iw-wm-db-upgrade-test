@@ -68,7 +68,10 @@ def instance_summary(data):
     return {
         "instance": data.get("instance") or data.get("inventory_hostname") or data.get("host") or "",
         "host": data.get("host") or data.get("inventory_hostname") or "",
+        "address": data.get("address", ""),
         "inventory_hostname": data.get("inventory_hostname") or "",
+        "ok": bool(data.get("ok", not data.get("errors"))),
+        "errors": data.get("errors", []),
         "mysql_version": (data.get("mysql") or {}).get("version", ""),
         "mysql_endpoint": endpoint_string((data.get("mysql") or {}).get("endpoint")),
         "databases": totals.get("databases", len(databases)),
@@ -117,8 +120,11 @@ def instance_summary(data):
     }
 
 
-def build_overview(instances, stamp):
+def build_overview(instances, stamp, failed_instances=None):
+    failed_instances = [h for h in (failed_instances or []) if h]
     summaries = [instance_summary(data) for data in instances]
+    # Instance summary order: DB data size (DATA_LENGTH) descending.
+    summaries.sort(key=lambda s: (-s["data_bytes"], s["instance"]))
 
     flat = []
     for summary in summaries:
@@ -152,6 +158,8 @@ def build_overview(instances, stamp):
         "schema_version": 1,
         "generated_at": stamp,
         "instance_count": len(summaries),
+        "failed_instance_count": len(failed_instances),
+        "failed_instances": failed_instances,
         "instances": summaries,
         "databases": flat,
         "rankings": {
@@ -189,14 +197,20 @@ def render_markdown(overview):
     lines.append("# IceWarp database & backup probe")
     lines.append("")
     lines.append(
-        "Generated `%s` over %d instance(s): %s."
+        "Generated `%s` over %d instance(s) with a report; %d without a report."
         % (
             overview["generated_at"],
             overview["instance_count"],
-            ", ".join("`%s`" % i["instance"] for i in instances) or "none",
+            overview.get("failed_instance_count", 0),
         )
     )
     lines.append("")
+    if overview.get("failed_instances"):
+        lines.append(
+            "No report (unreachable, no root access or probe error): %s."
+            % ", ".join("`%s`" % h for h in overview["failed_instances"])
+        )
+        lines.append("")
     lines.append(
         "Read-only probe: `information_schema` byte counters plus an estimated "
         "row count per table (no data or schema is modified). Full per-table "
@@ -207,18 +221,21 @@ def render_markdown(overview):
     lines.append("## Instance summary")
     lines.append("")
     lines.append(
-        "| Instance | Host | MySQL | DBs | Tables | Rows | Data | Total (data+idx) | Latest backup | Backup size |"
+        "| Instance | Host | Address | Status | MySQL | DBs | Tables | Rows | Data | Total (data+idx) | Latest backup | Backup size |"
     )
     lines.append(
-        "|----------|------|-------|-----|--------|------|------|------------------|---------------|-------------|"
+        "|----------|------|---------|--------|-------|-----|--------|------|------|------------------|---------------|-------------|"
     )
-    for inst in instances:
+    # Instance summary order: DB data size (DATA_LENGTH) descending.
+    for inst in sorted(instances, key=lambda i: (-i["data_bytes"], i["instance"])):
         lb = inst["latest_backup"]
         lines.append(
-            "| `%s` | `%s` | %s | %d | %d | %s | %s | %s | %s | %s |"
+            "| `%s` | `%s` | `%s` | %s | %s | %d | %d | %s | %s | %s | %s | %s |"
             % (
                 inst["instance"],
                 inst["host"],
+                inst.get("address", "") or "-",
+                "ok" if inst["ok"] else "error",
                 inst["mysql_version"] or "n/a",
                 inst["databases"],
                 inst["table_count"],
@@ -230,6 +247,14 @@ def render_markdown(overview):
             )
         )
     lines.append("")
+
+    error_instances = [i for i in instances if not i["ok"]]
+    if error_instances:
+        lines.append("## Instances reporting errors")
+        lines.append("")
+        for inst in error_instances:
+            lines.append("- `%s` (%s): %s" % (inst["instance"], inst["host"], "; ".join(inst["errors"])))
+        lines.append("")
 
     def ranking_table(rows, value_header, value_fmt):
         lines.append("| # | Instance | Database | Component | Table | %s |" % value_header)
@@ -272,7 +297,11 @@ def render_markdown(overview):
     lines.append(
         "|----------|-----------|-------|------|--------|---------|-----------|--------|---------------|"
     )
-    for inst in instances:
+    # Latest backup set order: backup set size descending.
+    backups_sorted = sorted(
+        instances, key=lambda i: (-i["latest_backup"]["total_bytes"], i["instance"])
+    )
+    for inst in backups_sorted:
         lb = inst["latest_backup"]
         age = "n/a" if lb["age_hours"] is None else "%.1f" % lb["age_hours"]
         lines.append(
@@ -346,6 +375,11 @@ def main(argv=None):
     parser.add_argument("--out-json", default="", help="write the overview JSON here")
     parser.add_argument("--out-md", default="", help="write the overview Markdown here")
     parser.add_argument("--stamp", default="", help="override the generated_at stamp")
+    parser.add_argument(
+        "--failed-instances",
+        default="",
+        help="comma-separated instances that produced no report",
+    )
     args = parser.parse_args(argv)
 
     inputs = list(args.input) + list(args.paths)
@@ -357,7 +391,8 @@ def main(argv=None):
     )
     instances = load_instances(inputs)
     log("loaded %d instance(s)" % len(instances))
-    overview = build_overview(instances, stamp)
+    failed = [h.strip() for h in args.failed_instances.split(",") if h.strip()]
+    overview = build_overview(instances, stamp, failed)
 
     if args.out_json:
         with open(args.out_json, "w") as handle:

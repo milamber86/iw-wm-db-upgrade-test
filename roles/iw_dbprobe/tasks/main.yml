@@ -27,15 +27,25 @@
     iw_dbprobe_stamp: "{{ hostvars['localhost'].iw_dbprobe_stamp }}"
     iw_dbprobe_generated_at: "{{ hostvars['localhost'].iw_dbprobe_generated_at }}"
 
+# Resolve a DNS name for the host: the inventory FQDN (`vps_hostname` in the
+# real inventory), else the inventory name, else ansible_host. An IPv4 literal
+# is skipped (it has no letter after a dot), so a host addressed by IP still
+# reports its inventory name.
+- name: Derive the instance host name
+  ansible.builtin.set_fact:
+    iw_dbprobe_fqdn: >-
+      {{ ([vps_hostname | default(''), inventory_hostname, ansible_host | default('')]
+          | select('search', '\.[A-Za-z]') | list | first) | default(inventory_hostname, true) }}
+
 # Instance short name: the first hostname label under `onice.io`
-# (icewarp.onice.io -> icewarp), otherwise the whole hostname
+# (support3.onice.io -> support3), otherwise the whole hostname
 # (mail.icewarp.com stays mail.icewarp.com).
 - name: Derive the instance short name
   ansible.builtin.set_fact:
     iw_dbprobe_instance: >-
-      {{ (ansible_host | default(inventory_hostname)).split('.')[0]
-         if (ansible_host | default(inventory_hostname)).endswith('onice.io')
-         else (ansible_host | default(inventory_hostname)) }}
+      {{ iw_dbprobe_fqdn.split('.')[0]
+         if iw_dbprobe_fqdn.endswith('onice.io')
+         else iw_dbprobe_fqdn }}
 
 - name: Build the optional database filter arguments
   ansible.builtin.set_fact:
@@ -55,35 +65,53 @@
       --db-pattern {{ iw_dbprobe_db_pattern }}
       --row-count-mode {{ iw_dbprobe_row_count_mode }}
       --instance {{ iw_dbprobe_instance }}
-      --host-label {{ ansible_host | default(inventory_hostname) }}
+      --host-label {{ iw_dbprobe_fqdn }}
+      --address {{ ansible_host | default('') }}
       --inventory-hostname {{ inventory_hostname }}
       --generated-at {{ iw_dbprobe_generated_at }}
+      --out {{ iw_dbprobe_remote_json }}
       {{ iw_dbprobe_extra_args | default('') }}
   register: iw_dbprobe_raw
   changed_when: false
   become: "{{ iw_dbprobe_become }}"
+  # The script itself never fails on a bad DB connection (it emits a report with
+  # errors); a non-zero rc means the probe could not run at all on the target.
   failed_when: (iw_dbprobe_raw.rc | default(0)) != 0
 
-- name: Save the per-server probe report on the control node
-  ansible.builtin.copy:
-    content: "{{ iw_dbprobe_raw.stdout }}\n"
+- name: Check the remote probe report
+  ansible.builtin.stat:
+    path: "{{ iw_dbprobe_remote_json }}"
+  become: "{{ iw_dbprobe_become }}"
+  register: iw_dbprobe_remote_stat
+
+- name: Fetch the per-server probe report to the control node
+  ansible.builtin.fetch:
+    src: "{{ iw_dbprobe_remote_json }}"
     dest: "{{ iw_dbprobe_json_path }}"
-    mode: "0644"
-  delegate_to: localhost
-  become: false
+    flat: true
+  become: "{{ iw_dbprobe_become }}"
+  when: iw_dbprobe_remote_stat.stat.exists
 
 - name: Record the saved per-server report path
   ansible.builtin.set_fact:
     iw_dbprobe_saved_path: "{{ iw_dbprobe_json_path }}"
-    iw_dbprobe_probe_totals: "{{ (iw_dbprobe_raw.stdout | from_json).database_totals | default({}) }}"
+  when: iw_dbprobe_remote_stat.stat.exists
 
 - name: Report the probed instance
   ansible.builtin.debug:
-    msg: >-
-      {{ iw_dbprobe_instance }} ({{ inventory_hostname }}): databases={{ iw_dbprobe_probe_totals.databases | default(0) }},
-      tables={{ iw_dbprobe_probe_totals.table_count | default(0) }},
-      rows={{ iw_dbprobe_probe_totals.row_count | default(0) }},
-      report={{ iw_dbprobe_saved_path }}
+    msg: "{{ iw_dbprobe_instance }} ({{ inventory_hostname }}): report={{ iw_dbprobe_saved_path }}"
+  when: iw_dbprobe_remote_stat.stat.exists
+
+# Cleanup only: the report is already fetched, so a failure here (some hosts
+# re-prompt for sudo on a later invocation) must not fail the host.
+- name: Remove the remote probe report
+  ansible.builtin.file:
+    path: "{{ iw_dbprobe_remote_json }}"
+    state: absent
+  become: "{{ iw_dbprobe_become }}"
+  changed_when: false
+  failed_when: false
+  when: iw_dbprobe_remote_stat.stat.exists
 
 - name: Build the combined overview report
   ansible.builtin.include_tasks:
