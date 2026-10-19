@@ -25,8 +25,27 @@ iw_storage_paths: {}
 # "directory already exists ... information was not found" exit when the config
 # file is genuinely absent.
 iw_install_patch_guards: false
+# TEST BED ONLY: neutralise install.sh's WCIS pre-flight gate. Build 2784 refuses
+# to upgrade when C_WCIS_UpgradeStatus=2 ("warn and require reconfiguration"),
+# which is what it reports for very large WebClient DBs (e.g. 35 M items /
+# ~330 min estimate). The patch makes check_wcis_upgrade() log the status it
+# would have blocked on and return, so the migration runs inline. Never use this
+# for a production run.
+iw_install_patch_wcis: false
 iw_install_apply_license: true
 iw_install_start_services: true
+# Run install.sh in INTERACTIVE mode (no switches) through a pty and answer its
+# prompts. Required for upgrade steps: automode exits 3 when the installer's 300 s
+# "Waiting for groupware DB" wait expires, whereas interactive mode warns, asks to
+# continue and then waits for the database work (see roles/iw_install/files/
+# iw-interactive-install.py). Fresh installs can stay on automode.
+iw_install_interactive: false
+iw_install_interactive_driver: /root/iw-interactive-install.py
+iw_install_interactive_log_name: "interactive-{{ iw_install_version_id }}.log"
+# install.sh exits non-zero for known-benign upgrade conditions (the 14.4 step exits 3 on the
+# 'Waiting for Groupware DB' timeout while the WebClient DB migration is still running in the
+# background). A non-zero status is reported; set this true to make it fatal.
+iw_install_require_zero_rc: false
 
 # Idempotency marker: one file per installed version, written after a successful
 # install. Re-running with the same version skips download/extract/installer.

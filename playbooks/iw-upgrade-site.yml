@@ -11,19 +11,27 @@
 #   (c) iwtarget    -> restore production dumps (prod firewall tasks delegated)
 #   (d) iwtarget    -> validate accounts/services/iwmon2
 #   (e) iwtarget    -> run the 14.4 installer, capture ALTER timings, render report
+#
+# The last play is tagged `upgrade`, so
+#   ansible-playbook ... --skip-tags upgrade
+# runs (a)-(d) only and leaves a ready 14.3 test bed (IceWarp 14.3 running on the
+# restored production databases, behind ProxySQL) for a manual install.sh upgrade.
 
 - name: Provision the IceWarp upgrade test VM
   hosts: hypervisors
   gather_facts: false
+  tags: [provision]
   roles:
     - role: iw_provision
 
 - name: Base OS, Percona MySQL and IceWarp 14.3
   hosts: iwtarget
   gather_facts: true
+  tags: [base]
   roles:
     - role: iw_base
     - role: mysql_fastload
+    - role: iw_proxysql
     - role: iw_install
       vars:
         iw_install_url: "{{ iw_version_143_url }}"
@@ -39,18 +47,21 @@
 - name: Restore production databases
   hosts: iwtarget
   gather_facts: true
+  tags: [restore]
   roles:
     - role: iw_restore
 
 - name: Validate the restored IceWarp server and iwmon2
   hosts: iwtarget
   gather_facts: true
+  tags: [validate]
   roles:
     - role: iw_validate
 
 - name: Upgrade 14.3 -> 14.4 and capture ALTER timings
   hosts: iwtarget
   gather_facts: true
+  tags: [upgrade]
   roles:
     - role: iw_upgrade
     - role: iw_timing

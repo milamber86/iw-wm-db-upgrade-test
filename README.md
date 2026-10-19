@@ -143,9 +143,9 @@ Timed statements in `files/migration_steps.yml` match the production script: orp
 
 The same repo also carries a repeatable, Ansible-orchestrated upgrade harness
 that provisions a 16 vCPU / 128 GB AlmaLinux 9 VM on the Infralab hypervisor,
-installs IceWarp 14.3 + Percona Server 8.0, restores the newest production
-`.sql.gz` dumps, validates accounts/services/`iwmon2`, then runs the unattended
-14.4 installer while capturing per-`ALTER` timings into
+installs IceWarp 14.3 + Percona Server 8.0 behind ProxySQL 2.4.8, restores the
+newest production `.sql.gz` dumps, validates accounts/services/`iwmon2`, then
+runs the unattended 14.4 installer while capturing per-`ALTER` timings into
 `reports/upgrade_benchmark_*.{md,json}`.
 
 See `.kilo/plans/1791898144101-icewarp-143-144-upgrade-test.md` for the design.
@@ -161,6 +161,7 @@ playbooks/iw-upgrade-site.yml               full orchestrator
 roles/iw_provision                          vps_vm wrapper + IP discovery + generated inventory
 roles/iw_base                               OS prereqs, hosts, sysctl, firewall
 roles/mysql_fastload                        Percona 8.0 + fast-import drop-in + apply/revert
+roles/iw_proxysql                           ProxySQL 2.4.8 in front of Percona (cloud-like DB path)
 roles/iw_install                            pinned installer, auto upgrade detection, license (fresh/upgrade)
 roles/iw_restore                            prod firewall exception, scp pull, import, DB remap
 roles/iw_validate                           account export, iwmon2 config regen, probes
@@ -209,6 +210,18 @@ ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-site.yml \
 - **Engine:** Percona Server 8.0 (not MariaDB); `/etc/my.cnf` is written before
   the first server start so the datadir is initialized with
   `lower_case_table_names=1` (immutable afterwards).
+- **ProxySQL:** the cloud IceWarp servers do not connect to MySQL directly —
+  their `/root/.my.cnf` points at a proxy endpoint (e.g. `10.200.99.8:4008`), so
+  the application always talks through ProxySQL. `roles/iw_proxysql` installs
+  the pinned 2.4.8 RPM, creates the monitor/application accounts with
+  `mysql_native_password`, writes `/etc/proxysql.cnf` before the first start and
+  then reconciles the backend/user through the admin interface. IceWarp is
+  pointed at `iw_db_host:iw_db_port` (ProxySQL `127.0.0.1:6033`) while the
+  Ansible admin/import steps keep using the local socket. This matters for the
+  upgrade: ProxySQL multiplexes backend connections and resets session state,
+  which changes how `old_alter_table` behaves for IceWarp's 14.4 `ALTER`s, so
+  the captured timings and resulting schema are only comparable to production
+  with the proxy in the path. Set `proxysql_enabled: false` to bypass it.
 - **Fast import:** `files/iw_my_fastload.cnf` (`skip-log-bin`,
   `innodb_doublewrite=OFF`, `innodb_flush_log_at_trx_commit=0`, `sync_binlog=0`)
   is applied only around the restore and reverted before the upgrade so ALTER

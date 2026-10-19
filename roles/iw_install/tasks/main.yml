@@ -117,6 +117,44 @@
     - iw_install_patch_guards | bool
     - iw_internal_find.matched > 0
 
+- name: Bypass the WCIS pre-flight gate (test bed only)
+  # Build 2784's check_wcis_upgrade() aborts the upgrade when
+  # C_WCIS_UpgradeStatus=2 ("warn and require reconfiguration"), which it
+  # reports for large WebClient DBs even though the inline migration is exactly
+  # what we want to measure. Insert a marker-guarded early return that logs the
+  # status/duration it skips. Idempotent: the marker prevents re-patching.
+  ansible.builtin.shell: |
+    set -e
+    f="{{ iw_internal_find.files[0].path }}"
+    if grep -q 'TESTBED_WCIS_GATE_BYPASS' "$f"; then
+      echo already-patched
+      exit 0
+    fi
+    python3 - "$f" <<'PY'
+    import sys
+    p = sys.argv[1]
+    s = open(p).read()
+    old = "check_wcis_upgrade()\n{\n"
+    assert old in s, "check_wcis_upgrade() not found in %s" % p
+    new = old + (
+        '    # TESTBED_WCIS_GATE_BYPASS: skip the WCIS pre-flight gate (large-dataset test)\n'
+        '    warn "TESTBED: WCIS gate bypassed (status=$(get_liccheck_variable system C_WCIS_UpgradeStatus), '
+        'estimated $(get_liccheck_variable system C_WCIS_UpgradeDuration) min)"\n'
+        '    return 0\n'
+    )
+    open(p, "w").write(s.replace(old, new, 1))
+    PY
+    echo patched
+  args:
+    executable: /bin/bash
+  register: iw_wcis_patch
+  changed_when: "'patched' in (iw_wcis_patch.stdout | default(''))"
+  become: true
+  when:
+    - iw_install_needed | bool
+    - iw_install_patch_wcis | bool
+    - iw_internal_find.matched > 0
+
 - name: Create the IceWarp service group
   ansible.builtin.group:
     name: "{{ iw_run_as_user }}"
@@ -134,6 +172,30 @@
     state: present
   become: true
 
+- name: Install the interactive installer driver
+  ansible.builtin.copy:
+    src: iw-interactive-install.py
+    dest: "{{ iw_install_interactive_driver }}"
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when: iw_install_interactive | bool
+
+- name: Run the IceWarp installer in interactive mode (no switches)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ iw_install_interactive_driver }}"
+      - "{{ iw_installer_dir }}"
+      - "{{ iw_log_dir }}/{{ iw_install_interactive_log_name }}"
+  register: iw_install_run_interactive
+  changed_when: true
+  become: true
+  when:
+    - iw_install_needed | bool
+    - iw_install_interactive | bool
+
 - name: Run the IceWarp installer in automatic mode (capturing stdout+stderr)
   ansible.builtin.shell: |
     set -o pipefail
@@ -150,6 +212,7 @@
   when:
     - iw_install_needed | bool
     - iw_install_tee_log | bool
+    - not (iw_install_interactive | bool)
 
 - name: Run the IceWarp installer in automatic mode
   ansible.builtin.command:
@@ -167,12 +230,46 @@
       - "1"
     chdir: "{{ iw_installer_dir }}"
     stdin: /dev/null
-  register: iw_install_run
+  register: iw_install_run_plain
   changed_when: true
   become: true
   when:
     - iw_install_needed | bool
     - not (iw_install_tee_log | bool)
+    - not (iw_install_interactive | bool)
+
+- name: Record the installer exit status
+  ansible.builtin.set_fact:
+    iw_install_rc: >-
+      {{ iw_install_run.rc if (iw_install_run is defined and iw_install_run.rc is defined)
+         else (iw_install_run_plain.rc if (iw_install_run_plain is defined and iw_install_run_plain.rc is defined)
+         else (iw_install_run_interactive.rc if (iw_install_run_interactive is defined and iw_install_run_interactive.rc is defined)
+         else 'n/a')) }}
+
+- name: Report the installer exit status
+  ansible.builtin.debug:
+    msg: >-
+      install.sh for {{ iw_install_version_id }} exited with rc={{ iw_install_rc }}.
+      {% if iw_install_rc not in ['0', 'n/a'] %}
+      Non-zero is EXPECTED for the 14.4-over-14.3 step: the installer's
+      'wait_database_upgrade "Groupware" "C_GW_UpgradeStatus" … 300' wait can never be satisfied
+      (C_GW_UpgradeStatus is 0 when idle and returns to 0 once the fast groupware DB upgrade is
+      done), so install.sh warns and exits 3 after 300 s without waiting for the WebClient DB
+      migration and without running upgrade.sh. iw_upgrade waits for that migration and runs
+      upgrade.sh itself — see {{ iw_log_dir }}/{{ iw_install_log_name }}.
+      {% endif %}
+  when: iw_install_rc is defined
+
+- name: Fail on a non-zero installer exit status when requested
+  ansible.builtin.fail:
+    msg: >-
+      install.sh for {{ iw_install_version_id }} exited with rc={{ iw_install_rc }}.
+      See {{ iw_log_dir }}/{{ iw_install_log_name }}.
+      Set iw_install_require_zero_rc=false if this is the known 14.4 'Waiting for Groupware DB' exit 3.
+  when:
+    - iw_install_require_zero_rc | bool
+    - iw_install_rc is defined
+    - iw_install_rc not in ['0', 'n/a']
 
 - name: Assert the tool binary is present
   ansible.builtin.stat:

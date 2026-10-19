@@ -137,6 +137,68 @@
   register: iw_upgrade_ts_end
   changed_when: false
 
+- name: Wait for the WebClient DB migration to finish before touching IceWarp
+  # install.sh exits 3 on the 'Waiting for Groupware DB' 300 s timeout and never reaches its own
+  # wait_database_upgrade "WebClient" "C_WC_UpgradeStatus" step. C_WC_UpgradeStatus is 1 while the
+  # WebClient v2 migration runs and 2 when it is done, so wait for 2 here. Restarting IceWarp first
+  # (the previous behaviour) killed the in-flight COPY and left the schema half migrated.
+  ansible.builtin.shell: |
+    deadline=$(( $(date +%s) + {{ iw_upgrade_dbwait_timeout_sec | int }} ))
+    status=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      status=$(sh {{ iw_tool_cmd }} get system C_WC_UpgradeStatus 2>/dev/null | sed '1 s/^[^:]*: //' | tr -d '\r' | head -n 1)
+      in_flight=$({{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }} -N -e \
+        "SELECT COUNT(*) FROM information_schema.processlist WHERE info LIKE 'ALTER TABLE%' OR info LIKE 'DELETE FROM%' OR info LIKE 'DELETE % FROM%'" 2>/dev/null)
+      echo "C_WC_UpgradeStatus=${status:-?} in_flight=${in_flight:-?}"
+      if [ "$status" = "2" ]; then
+        echo "DONE"
+        exit 0
+      fi
+      sleep {{ iw_upgrade_dbwait_poll_sec | int }}
+    done
+    echo "TIMEOUT"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: iw_upgrade_dbwait
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Report the WebClient DB migration wait
+  ansible.builtin.debug:
+    msg: "{{ iw_upgrade_dbwait.stdout_lines | default([]) }}"
+
+- name: Require the WebClient DB migration to complete
+  ansible.builtin.assert:
+    that:
+      - "'DONE' in (iw_upgrade_dbwait.stdout | default(''))"
+    fail_msg: >-
+      The WebClient v2 DB migration did not report C_WC_UpgradeStatus=2 within
+      {{ iw_upgrade_dbwait_timeout_sec }}s. Last status lines:
+      {{ iw_upgrade_dbwait.stdout_lines | default([]) | last | default('n/a') }}.
+      See /opt/icewarp/logs/maintenance/ for 'WebClient DB upgrade task ... failed'.
+
+- name: Run the upgrade step the installer skipped after its timeout
+  # install.sh aborts before 'Performing customizations tasks ... -> upgrade.sh <old version>', so
+  # do what the installer itself tells the operator to run afterwards.
+  ansible.builtin.command:
+    argv:
+      - "{{ iw_install_dir }}/upgrade.sh"
+      - "{{ iw_upgrade_old_version }}"
+  args:
+    chdir: "{{ iw_install_dir }}"
+  register: iw_upgrade_upgrade_sh
+  changed_when: true
+  failed_when: false
+  become: true
+  when: iw_upgrade_run_upgrade_sh | bool
+
+- name: Report the skipped upgrade step result
+  ansible.builtin.debug:
+    msg: "upgrade.sh {{ iw_upgrade_old_version }} rc={{ iw_upgrade_upgrade_sh.rc | default('skipped') }}"
+  when: iw_upgrade_run_upgrade_sh | bool
+
 - name: Start IceWarp so the 14.4 schema migration runs
   ansible.builtin.command: "{{ iw_icewarpd }} --restart all"
   changed_when: true

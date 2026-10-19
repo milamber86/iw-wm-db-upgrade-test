@@ -9,5 +9,9 @@ iw_storage_db: "{{ iw_db_names | default({}) }}"
 
 mysql_host: 127.0.0.1
 mysql_port: 3306
+# Endpoint written into the WebClient server.xml. Defaults to the direct MySQL
+# instance; the test bed overrides this to the ProxySQL listener (roles/iw_proxysql).
+iw_db_host: "{{ mysql_host }}"
+iw_db_port: "{{ mysql_port }}"
 mysql_iw_user: iwdb
 mysql_iw_password: iwdbpass

@@ -1,0 +1,44 @@
+---
+# /etc/proxysql.cnf is only imported into ProxySQL's SQLite store when the store
+# does not exist yet, so it must be written before the very first start. It is
+# owned by the `proxysql` package user (created by the RPM) because the service
+# reads it as that user.
+
+- name: Render the ProxySQL configuration
+  ansible.builtin.template:
+    src: proxysql.cnf.j2
+    dest: "{{ proxysql_config_file }}"
+    owner: root
+    group: "{{ proxysql_package }}"
+    mode: "0640"
+  become: true
+  no_log: true
+
+- name: Ensure the ProxySQL data directory exists
+  ansible.builtin.file:
+    path: "{{ proxysql_datadir }}"
+    state: directory
+    owner: "{{ proxysql_package }}"
+    group: "{{ proxysql_package }}"
+    mode: "0750"
+  become: true
+
+- name: Render the ProxySQL admin client defaults
+  ansible.builtin.template:
+    src: admin_defaults.cnf.j2
+    dest: "{{ proxysql_admin_defaults_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Render the ProxySQL application client defaults
+  ansible.builtin.template:
+    src: app_defaults.cnf.j2
+    dest: "{{ proxysql_app_defaults_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true

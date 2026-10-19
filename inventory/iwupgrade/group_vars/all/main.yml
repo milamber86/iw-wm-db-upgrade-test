@@ -66,12 +66,22 @@ iw_storage_paths:
 # IceWarp versions to install
 # ---------------------------------------------------------------------------
 iw_version_143: "14.3.0.12"
-iw_version_144: "14.4.0.0_20261012"
+iw_version_144: "14.4.0.0_20261018_2784"
 iw_version_143_url: "https://icewarp.onice.io/inst/IceWarpServer-14.3.0.12_RHEL9_x64.tar.gz"
-iw_version_144_url: "https://icewarp.onice.io/inst/IceWarpServer-14.4.0.0_20261012_RHEL9_x64_2775.tar.gz"
+iw_version_144_url: "https://linuxbuilds.icewarp.com/RHEL9_x64/devel/2026-10-18-23-38-25/IceWarpServer-14.4.0.0_20261018_RHEL9_x64_2784.tar.gz"
 # Optional sha256 pins; empty means "do not verify the checksum".
 iw_pkg_sha256_143: ""
-iw_pkg_sha256_144: ""
+iw_pkg_sha256_144: "342bba7fc9ed91930a57d85a5aadc8c52010d3631533019495678f48cfcc2cd9"
+
+# --- 14.2 -> 14.3 -> 14.4 chain (playbooks/iw-upgrade-chain.yml) -------------
+# Fresh install 14.2.0.17, restore the tp1 14.2 data, upgrade interactively to
+# 14.3.0.13, then run the measured 14.4 upgrade (iw_version_144 above).
+iw_version_142: "14.2.0.17"
+iw_version_142_url: "https://linuxbuilds.icewarp.com/RHEL9_x64/14.2.0.x/2026-10-19-10-42-55/IceWarpServer-14.2.0.17_20261019_RHEL9_x64_557.tar.gz"
+iw_pkg_sha256_142: "c55c340a7f284e46c31679397463923b525699d69d966e7e44a3c9838b233a11"
+iw_version_143_upgrade: "14.3.0.13"
+iw_version_143_upgrade_url: "https://linuxbuilds.icewarp.com/RHEL9_x64/14.3.0.13/2026-10-08-16-37-30/IceWarpServer-14.3.0.13_RHEL9_x64.tar.gz"
+iw_pkg_sha256_143_upgrade: "eb82fd9ae1b029df30eb7cb1da857c38ae018a50a9e3be4119e7389f70a75024"
 
 # ---------------------------------------------------------------------------
 # MySQL / Percona Server 8.0 (see roles/mysql_fastload)
@@ -95,6 +105,28 @@ mysql_iw_user: iwdb
 mysql_iw_password: "{{ vault_mysql_iw_password | default('Iwdbpass1!') }}"
 mysql_buffer_pool_size: 96G
 mysql_max_allowed_packet: 1G
+
+# ---------------------------------------------------------------------------
+# ProxySQL (roles/iw_proxysql)
+# ---------------------------------------------------------------------------
+# The cloud IceWarp servers reach MySQL through ProxySQL (their /root/.my.cnf
+# points at the proxy endpoint). ProxySQL multiplexes backend connections and
+# resets session state, which changes how old_alter_table behaves during
+# IceWarp's 14.4 ALTERs, so the test bed puts IceWarp behind ProxySQL too.
+proxysql_enabled: true
+proxysql_version: "2.4.8"
+proxysql_mysql_port: 6033
+proxysql_admin_port: 6032
+proxysql_admin_user: admin
+proxysql_admin_password: "{{ vault_proxysql_admin_password | default('Iwproxypass1!') }}"
+proxysql_monitor_user: proxysql_monitor
+proxysql_monitor_password: "{{ vault_proxysql_monitor_password | default('Iwmonpass1!') }}"
+proxysql_hostgroup_writer: 10
+
+# Endpoint IceWarp uses for every database (accounts, groupware, dircache, eas,
+# webclient). Points at ProxySQL when enabled, otherwise straight at MySQL.
+iw_db_host: "{{ '127.0.0.1' if proxysql_enabled | bool else mysql_host }}"
+iw_db_port: "{{ proxysql_mysql_port if proxysql_enabled | bool else mysql_port }}"
 
 # IceWarp logical databases created empty on the test VM (used as fallbacks when
 # a production dump for that component is absent).

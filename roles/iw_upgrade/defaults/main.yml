@@ -1,5 +1,5 @@
 ---
-iw_version_144: "14.4.0.0_20261012"
+iw_version_144: "14.4.0.0_20261014"
 iw_version_144_url: ""
 iw_pkg_sha256_144: ""
 
@@ -27,3 +27,14 @@ iw_upgrade_warmup_sec: 90
 iw_upgrade_settle_timeout_sec: 3600
 iw_upgrade_quiet_sec: 120
 iw_upgrade_extra_wait_sec: 30
+
+# install.sh aborts on the (benign) 'Waiting for Groupware DB' 300 s timeout before it waits for
+# the WebClient DB migration, so IceWarp must not be restarted until that migration finishes:
+# restarting kills the in-flight COPY. These control the wait that replaces the installer's
+# skipped wait, and the upgrade.sh step the abort also skipped.
+iw_upgrade_dbwait_timeout_sec: 1800
+iw_upgrade_dbwait_poll_sec: 15
+iw_upgrade_run_upgrade_sh: true
+# Previous version passed to upgrade.sh when install.sh aborts before its own
+# customisation step. Override for a chain (e.g. 14.3.0.13 when coming from 14.3).
+iw_upgrade_old_version: "{{ iw_version_143 }}"

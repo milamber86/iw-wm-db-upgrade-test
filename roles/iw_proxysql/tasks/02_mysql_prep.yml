@@ -1,0 +1,43 @@
+---
+# ProxySQL authenticates to the backend with its own monitor account (health
+# checks) and with the credential stored in mysql_users for application
+# traffic. ProxySQL 2.4 authenticates to MySQL 8 with mysql_native_password, so
+# both accounts are pinned to that plugin.
+
+- name: Render the ProxySQL MySQL bootstrap SQL
+  ansible.builtin.copy:
+    dest: /root/.proxysql-mysql-bootstrap.sql
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      CREATE USER IF NOT EXISTS '{{ proxysql_monitor_user }}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ proxysql_monitor_password }}';
+      CREATE USER IF NOT EXISTS '{{ proxysql_monitor_user }}'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '{{ proxysql_monitor_password }}';
+      ALTER USER '{{ proxysql_monitor_user }}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ proxysql_monitor_password }}';
+      ALTER USER '{{ proxysql_monitor_user }}'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '{{ proxysql_monitor_password }}';
+      GRANT USAGE, REPLICATION CLIENT, PROCESS ON *.* TO '{{ proxysql_monitor_user }}'@'localhost';
+      GRANT USAGE, REPLICATION CLIENT, PROCESS ON *.* TO '{{ proxysql_monitor_user }}'@'127.0.0.1';
+
+      CREATE USER IF NOT EXISTS '{{ mysql_iw_user }}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      CREATE USER IF NOT EXISTS '{{ mysql_iw_user }}'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      ALTER USER '{{ mysql_iw_user }}'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      ALTER USER '{{ mysql_iw_user }}'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '{{ mysql_iw_password }}';
+      FLUSH PRIVILEGES;
+  become: true
+  no_log: true
+
+- name: Apply the ProxySQL MySQL bootstrap SQL
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} --defaults-extra-file={{ mysql_defaults_file }}
+    < /root/.proxysql-mysql-bootstrap.sql
+  args:
+    executable: /bin/bash
+  become: true
+  no_log: true
+  changed_when: false
+
+- name: Remove the ProxySQL MySQL bootstrap SQL
+  ansible.builtin.file:
+    path: /root/.proxysql-mysql-bootstrap.sql
+    state: absent
+  become: true

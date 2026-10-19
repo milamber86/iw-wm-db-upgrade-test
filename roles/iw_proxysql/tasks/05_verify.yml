@@ -1,0 +1,57 @@
+---
+# Prove traffic actually works through the proxy: connect as IceWarp's own user
+# on the ProxySQL port (nothing else listens there) and then read the ProxySQL
+# connection pool to confirm the backend connection was opened.
+
+- name: Verify the IceWarp user can reach MySQL through ProxySQL
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-file={{ proxysql_app_defaults_file }}"
+      - "--connect-timeout=5"
+      - --batch
+      - --skip-column-names
+      - -e
+      - SELECT 'ok'
+  register: proxysql_app_probe
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Require the proxied connection
+  ansible.builtin.assert:
+    that:
+      - (proxysql_app_probe.rc | default(1)) == 0
+    fail_msg: >-
+      {{ mysql_iw_user }} could not reach MySQL through ProxySQL at
+      {{ proxysql_client_host }}:{{ proxysql_mysql_port }}.
+      stderr: {{ proxysql_app_probe.stderr | default('') | trim }}
+
+- name: Read the ProxySQL backend connection pool
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-file={{ proxysql_admin_defaults_file }}"
+      - --batch
+      - --skip-column-names
+      - -e
+      - >-
+        SELECT hostgroup, srv_host, srv_port, status, ConnUsed, ConnFree
+        FROM stats_mysql_connection_pool
+  register: proxysql_pool_state
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Report the ProxySQL connection pool
+  ansible.builtin.debug:
+    msg: "stats_mysql_connection_pool: {{ proxysql_pool_state.stdout_lines | default([]) }}"
+
+- name: Record the ProxySQL summary
+  ansible.builtin.set_fact:
+    iw_proxysql_summary:
+      version: "{{ proxysql_version }}"
+      mysql_endpoint: "{{ proxysql_client_host }}:{{ proxysql_mysql_port }}"
+      admin_endpoint: "{{ proxysql_admin_host }}:{{ proxysql_admin_port }}"
+      backend: "{{ mysql_host }}:{{ mysql_port }}"
+      hostgroup_writer: "{{ proxysql_hostgroup_writer }}"

@@ -1,0 +1,30 @@
+---
+# ProxySQL 2.4.8 in front of the local Percona Server 8.0. Order matters:
+# /etc/proxysql.cnf is written before the first service start (ProxySQL only
+# imports the config file into its SQLite store when the store does not exist),
+# then the same servers/users/variables are applied through the admin interface
+# so later runs converge without a restart.
+
+- name: Install the pinned ProxySQL package
+  ansible.builtin.import_tasks: 01_packages.yml
+  when: proxysql_enabled | bool
+
+- name: Prepare the MySQL accounts ProxySQL needs
+  ansible.builtin.import_tasks: 02_mysql_prep.yml
+  when: proxysql_enabled | bool
+
+- name: Deploy the ProxySQL configuration
+  ansible.builtin.import_tasks: 03_config.yml
+  when: proxysql_enabled | bool
+
+- name: Start ProxySQL and apply the runtime configuration
+  ansible.builtin.import_tasks: 04_service.yml
+  when: proxysql_enabled | bool
+
+- name: Verify IceWarp's databases are reachable through ProxySQL
+  ansible.builtin.import_tasks: 05_verify.yml
+  when: proxysql_enabled | bool
+
+- name: Open the ProxySQL port to the management network
+  ansible.builtin.import_tasks: 06_firewall.yml
+  when: proxysql_enabled | bool

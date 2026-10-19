@@ -46,6 +46,13 @@ iw_base_packages:
   - tidy
   - wget
   - curl
+  # IceWarp 14.2's installer aborts ("dependencies not installed") unless these
+  # document-preview / media libraries are already present; its automode package
+  # step cannot install them itself. All four are in Rocky 9 appstream.
+  - gdk-pixbuf2
+  - gtk3
+  - json-glib
+  - lame-libs
 
 iw_firewall_ports:
   - 25

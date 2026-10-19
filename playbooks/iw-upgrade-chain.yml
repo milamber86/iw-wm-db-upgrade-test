@@ -1,0 +1,158 @@
+---
+# 14.2.0.17 -> 14.3.0.13 -> measured 14.4.0.0 (2026-10-18, build 2784) chain.
+#
+#   export VPSCTL_TOKEN=...
+#   ansible-playbook -i inventory/iwupgrade playbooks/iw-upgrade-chain.yml \
+#     -e confirm_prod_transfer=true
+#
+# Data source: tp1.onice.io (IceWarp 14.2.0.16), dumps bck_db_*_n1-1_20261018-1712.
+#
+# Plays:
+#   (a) hypervisors -> provision the VM and add it as `iwtarget`
+#   (b) iwtarget    -> base OS + Percona 8.0 + ProxySQL + IceWarp 14.2.0.17
+#   (c) iwtarget    -> restore the tp1 dumps (tp1 firewall tasks delegated)
+#   (d) iwtarget    -> validate accounts/services/iwmon2
+#   (e) iwtarget    -> INTERACTIVE upgrade 14.2.0.16 -> 14.3.0.13
+#   (f) iwtarget    -> measured 14.4.0.0 upgrade + ALTER timings
+#
+# Both upgrade steps avoid `--auto`: automode exits 3 when the installer's 300 s
+# groupware-DB wait expires, while interactive mode warns and continues. The 14.4
+# step uses roles/iw_upgrade, which waits for the WebClient DB migration and runs
+# the upgrade.sh step the installer skipped.
+
+- name: Provision the IceWarp upgrade test VM
+  hosts: hypervisors
+  gather_facts: false
+  tags: [provision]
+  roles:
+    - role: iw_provision
+
+- name: Base OS, Percona MySQL and IceWarp 14.2.0.17
+  hosts: iwtarget
+  gather_facts: true
+  tags: [base]
+  roles:
+    - role: iw_base
+    - role: mysql_fastload
+    - role: iw_proxysql
+    - role: iw_install
+      vars:
+        iw_install_url: "{{ iw_version_142_url }}"
+        iw_install_version_id: "{{ iw_version_142 }}"
+        iw_install_sha256: "{{ iw_pkg_sha256_142 }}"
+        iw_install_apply_license: true
+        iw_install_start_services: true
+        iw_install_tee_log: true
+        iw_install_log_name: "install-14.2.log"
+    - role: iw_webclient
+    - role: iw_mon
+
+- name: Restore tp1 databases (2026-10-18 17:12 set)
+  hosts: iwtarget
+  gather_facts: true
+  tags: [restore]
+  vars:
+    prod_host: tp1
+    prod_ssh_host: tp1.onice.io
+    prod_ssh_user: beranek
+    prod_backup_glob: "bck_db_*_n1-1_20261018-1712.sql.gz"
+    prod_db_names_override:
+      acc: dbiwc219acc
+      asp: dbiwc219as
+      grw: dbiwc219gw
+      dc: dbiwc219dc
+      eas: dbiwc219eas
+      wc: dbiwc219wc
+    iw_db_names:
+      accounts: dbiwc219acc
+      antispam: dbiwc219as
+      groupware: dbiwc219gw
+      webclient: dbiwc219wc
+      eas: dbiwc219eas
+      dircache: dbiwc219dc
+  roles:
+    - role: iw_restore
+
+- name: Validate the restored IceWarp 14.2 server and iwmon2
+  hosts: iwtarget
+  gather_facts: true
+  tags: [validate]
+  vars:
+    iw_db_names:
+      accounts: dbiwc219acc
+      antispam: dbiwc219as
+      groupware: dbiwc219gw
+      webclient: dbiwc219wc
+      eas: dbiwc219eas
+      dircache: dbiwc219dc
+  roles:
+    - role: iw_validate
+
+- name: Interactive upgrade 14.2.0.16 -> 14.3.0.13
+  hosts: iwtarget
+  gather_facts: true
+  tags: [upgrade143]
+  tasks:
+    - name: Run the 14.3.0.13 installer interactively
+      ansible.builtin.include_role:
+        name: iw_install
+      vars:
+        iw_install_url: "{{ iw_version_143_upgrade_url }}"
+        iw_install_version_id: "{{ iw_version_143_upgrade }}"
+        iw_install_sha256: "{{ iw_pkg_sha256_143_upgrade }}"
+        iw_install_patch_guards: false
+        iw_install_apply_license: false
+        iw_install_start_services: false
+        iw_install_tee_log: false
+        iw_install_interactive: true
+
+    - name: Restart IceWarp after the 14.3 upgrade
+      ansible.builtin.command: "{{ iw_icewarpd }} --restart all"
+      changed_when: true
+      failed_when: false
+      become: true
+
+    - name: Wait for tool.sh after the 14.3 upgrade
+      ansible.builtin.command:
+        argv: [sh, "{{ iw_tool_cmd }}", display, system, c_version]
+      register: iw_chain_143_version
+      until: (iw_chain_143_version.rc | default(1)) == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Report the 14.3 version
+      ansible.builtin.debug:
+        msg: "after 14.3 step: {{ iw_chain_143_version.stdout | default('n/a') | trim }}"
+
+    - name: Require the 14.3 step to have landed on 14.3.0.13
+      ansible.builtin.assert:
+        that:
+          - "'14.3.0.13' in (iw_chain_143_version.stdout | default(''))"
+        fail_msg: >-
+          Expected 14.3.0.13 after the interactive upgrade, got
+          '{{ iw_chain_143_version.stdout | default('n/a') | trim }}'.
+
+- name: Measured upgrade 14.3.0.13 -> 14.4.0.0 and capture ALTER timings
+  hosts: iwtarget
+  gather_facts: true
+  tags: [upgrade144]
+  vars:
+    iw_upgrade_old_version: "{{ iw_version_143_upgrade }}"
+    # Build 2784 refuses the inline upgrade when C_WCIS_UpgradeStatus=2; the large
+    # tp1 dataset hits that (330 min estimate). Bypass the pre-flight gate and give
+    # the WebClient DB migration a generous wait (8 h).
+    iw_install_patch_wcis: true
+    iw_upgrade_dbwait_timeout_sec: 28800
+    iw_db_names:
+      accounts: dbiwc219acc
+      antispam: dbiwc219as
+      groupware: dbiwc219gw
+      webclient: dbiwc219wc
+      eas: dbiwc219eas
+      dircache: dbiwc219dc
+  roles:
+    - role: iw_upgrade
+    - role: iw_timing

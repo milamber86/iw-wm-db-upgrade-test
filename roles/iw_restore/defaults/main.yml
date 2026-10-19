@@ -34,6 +34,12 @@ mysql_bin: mysql
 mysql_defaults_file: /root/.my.cnf
 mysql_host: 127.0.0.1
 mysql_port: 3306
+# Endpoint IceWarp is pointed at for its restored databases. Defaults to the
+# direct MySQL instance; the test bed overrides this to the ProxySQL listener
+# (see roles/iw_proxysql) so IceWarp connects through the proxy like the cloud
+# servers do.
+iw_db_host: "{{ mysql_host }}"
+iw_db_port: "{{ mysql_port }}"
 mysql_charset: utf8mb4
 mysql_collation: utf8mb4_general_ci
 mysql_iw_user: iwdb

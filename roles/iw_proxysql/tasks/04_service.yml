@@ -1,0 +1,95 @@
+---
+- name: Start and enable ProxySQL
+  ansible.builtin.systemd:
+    name: "{{ proxysql_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Wait for the ProxySQL admin interface
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-file={{ proxysql_admin_defaults_file }}"
+      - "--connect-timeout=3"
+      - --batch
+      - --skip-column-names
+      - -e
+      - SELECT 1
+  register: proxysql_admin_ping
+  until: (proxysql_admin_ping.rc | default(1)) == 0
+  retries: "{{ proxysql_wait_retries }}"
+  delay: "{{ proxysql_wait_delay_sec }}"
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Require the ProxySQL admin interface
+  ansible.builtin.assert:
+    that:
+      - (proxysql_admin_ping.rc | default(1)) == 0
+    fail_msg: >-
+      ProxySQL admin interface on {{ proxysql_admin_host }}:{{ proxysql_admin_port }}
+      did not answer. Check `systemctl status {{ proxysql_service_name }}` and
+      {{ proxysql_datadir }}/proxysql.log.
+      stderr: {{ proxysql_admin_ping.stderr | default('') | trim }}
+
+- name: Render the ProxySQL runtime configuration SQL
+  ansible.builtin.template:
+    src: apply.sql.j2
+    dest: "{{ proxysql_apply_sql_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Apply the ProxySQL runtime configuration
+  ansible.builtin.shell: >-
+    {{ mysql_bin }} --defaults-file={{ proxysql_admin_defaults_file }}
+    --batch < {{ proxysql_apply_sql_file }}
+  args:
+    executable: /bin/bash
+  changed_when: true
+  no_log: true
+  become: true
+
+- name: Remove the ProxySQL runtime configuration SQL
+  ansible.builtin.file:
+    path: "{{ proxysql_apply_sql_file }}"
+    state: absent
+  become: true
+
+- name: Read the ProxySQL backend server state
+  ansible.builtin.command:
+    argv:
+      - "{{ mysql_bin }}"
+      - "--defaults-file={{ proxysql_admin_defaults_file }}"
+      - --batch
+      - --skip-column-names
+      - -e
+      - "SELECT hostgroup_id, hostname, port, status FROM runtime_mysql_servers"
+  register: proxysql_servers_state
+  changed_when: false
+  become: true
+
+- name: Report the ProxySQL backend server state
+  ansible.builtin.debug:
+    msg: "runtime_mysql_servers: {{ proxysql_servers_state.stdout_lines | default([]) }}"
+
+- name: Require the backend to be ONLINE in the writer hostgroup
+  ansible.builtin.assert:
+    that:
+      - proxysql_servers_state.stdout_lines | default([]) | length > 0
+      - >-
+        proxysql_servers_state.stdout_lines
+        | select('search',
+        '^' ~ (proxysql_hostgroup_writer | string) ~ '\t' ~ (mysql_host | regex_escape)
+        ~ '\t' ~ (mysql_port | string) ~ '\tONLINE')
+        | list | length > 0
+    fail_msg: >-
+      ProxySQL did not register {{ mysql_host }}:{{ mysql_port }} as ONLINE in
+      hostgroup {{ proxysql_hostgroup_writer }}:
+      {{ proxysql_servers_state.stdout_lines | default([]) }}.
+      The monitor account {{ proxysql_monitor_user }} or the backend address is wrong.

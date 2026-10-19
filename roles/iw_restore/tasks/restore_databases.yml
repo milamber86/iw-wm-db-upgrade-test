@@ -199,11 +199,11 @@
   ansible.builtin.command:
     argv: "{{ ['sh', iw_tool_cmd, 'set', 'system', item.key, item.value] }}"
   loop:
-    - { key: c_system_storage_accounts_odbcconnstring, value: "{{ iw_storage_db.accounts }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
-    - { key: c_as_challenge_connectionstring, value: "{{ iw_storage_db.antispam }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
-    - { key: c_gw_connectionstring, value: "{{ iw_storage_db.groupware }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
-    - { key: c_accounts_global_accounts_directorycacheconnectionstring, value: "{{ iw_storage_db.dircache }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ mysql_host }}:{{ mysql_port }};3;2" }
-    - { key: C_ActiveSync_DBConnection, value: "mysql:host={{ mysql_host }};port={{ mysql_port }};dbname={{ iw_storage_db.eas }}" }
+    - { key: c_system_storage_accounts_odbcconnstring, value: "{{ iw_storage_db.accounts }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ iw_db_host }}:{{ iw_db_port }};3;2" }
+    - { key: c_as_challenge_connectionstring, value: "{{ iw_storage_db.antispam }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ iw_db_host }}:{{ iw_db_port }};3;2" }
+    - { key: c_gw_connectionstring, value: "{{ iw_storage_db.groupware }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ iw_db_host }}:{{ iw_db_port }};3;2" }
+    - { key: c_accounts_global_accounts_directorycacheconnectionstring, value: "{{ iw_storage_db.dircache }};{{ mysql_iw_user }};{{ mysql_iw_password }};{{ iw_db_host }}:{{ iw_db_port }};3;2" }
+    - { key: C_ActiveSync_DBConnection, value: "mysql:host={{ iw_db_host }};port={{ iw_db_port }};dbname={{ iw_storage_db.eas }}" }
     - { key: C_ActiveSync_DBUser, value: "{{ mysql_iw_user }}" }
     - { key: C_ActiveSync_DBPass, value: "{{ mysql_iw_password }}" }
   loop_control:

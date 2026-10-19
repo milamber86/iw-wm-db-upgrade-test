@@ -1,0 +1,73 @@
+---
+# ProxySQL in front of the local Percona Server 8.0.
+#
+# The real cloud IceWarp servers do not open MySQL connections directly: their
+# `/root/.my.cnf` points at a proxy endpoint (e.g. `10.200.99.8:4008`) and the
+# application connects through ProxySQL. ProxySQL is not transparent for DDL —
+# it multiplexes backend connections and re-issues/reset session state — which
+# changes how `old_alter_table` behaves during IceWarp's 14.4 `ALTER`s. The test
+# bed therefore has to put IceWarp behind ProxySQL too, or the captured timings
+# and the resulting schema are not comparable to production.
+#
+# Proxied path:  IceWarp -> 127.0.0.1:{{ proxysql_mysql_port }} (ProxySQL)
+#                        -> 127.0.0.1:{{ mysql_port }} (Percona 8.0)
+
+proxysql_enabled: true
+
+# Pinned release. 2.4.8 is the last of the 2.4.x series; the 2.4.x AlmaLinux 9
+# repository only carries this build, and the RPM URL/sha256 pin it exactly.
+proxysql_version: "2.4.8"
+proxysql_rpm_url: "https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/almalinux/9/proxysql-2.4.8-1-almalinux9.x86_64.rpm"
+proxysql_rpm_sha256: "4e84770491cce9ecb3b30f4f530163aebb54a04a751250419580c34269a029ec"
+proxysql_rpm_path: "{{ iw_download_dir | default('/var/tmp/iw-install') }}/proxysql-{{ proxysql_version }}-1-almalinux9.x86_64.rpm"
+proxysql_package: proxysql
+proxysql_service_name: proxysql
+
+# Files.
+proxysql_config_file: /etc/proxysql.cnf
+proxysql_datadir: /var/lib/proxysql
+proxysql_admin_defaults_file: /root/.proxysql-admin.cnf
+proxysql_app_defaults_file: /root/.proxysql-app.cnf
+proxysql_apply_sql_file: /root/.proxysql-apply.sql
+
+# Admin interface (local only; 6032).
+proxysql_admin_user: admin
+proxysql_admin_password: "{{ vault_proxysql_admin_password | default('Iwproxypass1!') }}"
+proxysql_admin_host: 127.0.0.1
+proxysql_admin_port: 6032
+
+# MySQL (client-facing) interface; this is what IceWarp points at.
+proxysql_mysql_bind: "0.0.0.0"
+proxysql_mysql_port: 6033
+proxysql_client_host: 127.0.0.1
+proxysql_server_version: "8.0.44"
+proxysql_threads: 8
+proxysql_max_connections: 4096
+proxysql_max_allowed_packet: 268435456
+
+# Backend: the local Percona instance.
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_iw_user: iwdb
+mysql_iw_password: iwdbpass
+mysql_bin: mysql
+mysql_defaults_file: /root/.my.cnf
+proxysql_hostgroup_writer: 10
+
+# Health-check user ProxySQL's monitor module uses against the backend.
+proxysql_monitor_user: proxysql_monitor
+proxysql_monitor_password: "{{ vault_proxysql_monitor_password | default('Iwmonpass1!') }}"
+
+# Optional statement ProxySQL runs on every new backend connection
+# (ProxySQL `mysql-init_connect`). Left empty the backend session keeps the
+# server default. Set to 'SET SESSION old_alter_table=0' to pin IceWarp's ALTER
+# algorithm selection to the direct-connection behaviour even when the backend
+# has old_alter_table=ON globally (ProxySQL itself does not change
+# old_alter_table — see README).
+proxysql_init_connect: ""
+
+# Management network allowed to reach the ProxySQL MySQL port (firewalld).
+proxysql_firewall_source: "172.16.5.0/24"
+
+proxysql_wait_retries: 30
+proxysql_wait_delay_sec: 2

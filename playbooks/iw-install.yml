@@ -19,6 +19,7 @@
   roles:
     - role: iw_base
     - role: mysql_fastload
+    - role: iw_proxysql
     - role: iw_install
       vars:
         iw_install_url: "{{ iw_version_143_url }}"
