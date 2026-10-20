@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IceWarp 14.3 to 14.4 upgrade: database ALTER guide for large datasets</title>
+<style>
+  :root { --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --bg:#ffffff; --soft:#f6f8fa; --accent:#0969da; --warn:#9a6700; --warnbg:#fff8c5; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 2rem; line-height:1.25; margin:0 0 .6em; padding-bottom:.3em; border-bottom:1px solid var(--line); }
+  h2 { font-size: 1.45rem; margin:2.2em 0 .6em; padding-bottom:.25em; border-bottom:1px solid var(--line); }
+  h3 { font-size: 1.15rem; margin:1.8em 0 .5em; }
+  h4 { font-size: 1rem; margin:1.4em 0 .4em; }
+  p, ul, ol { margin: .6em 0 1em; }
+  li { margin: .25em 0; }
+  a { color: var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em;
+         background: var(--soft); padding: .15em .35em; border-radius: 5px; }
+  pre { background: var(--soft); border:1px solid var(--line); border-radius:8px;
+        padding: 14px 16px; overflow-x:auto; }
+  pre code { background:none; padding:0; font-size:.86em; line-height:1.5; }
+  table { border-collapse: collapse; width:100%; margin: 1em 0 1.4em; font-size:.94em; }
+  th, td { border:1px solid var(--line); padding: 8px 10px; text-align:left; vertical-align:top; }
+  th { background: var(--soft); font-weight:600; }
+  tbody tr:nth-child(even) { background: #fbfcfd; }
+  blockquote { margin: 1.2em 0; padding: 10px 16px; border-left: 4px solid var(--warn);
+               background: var(--warnbg); border-radius: 6px; }
+  blockquote p { margin: .3em 0; }
+  hr { border:0; border-top:1px solid var(--line); margin: 2.2em 0; }
+  .meta { color: var(--muted); font-size:.9em; margin-bottom:2em; }
+  @media print { main { max-width:none; padding:0; } pre, table { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<h1 id="icewarp-143-144-upgrade-database-alter-guide-for-large-datasets">IceWarp 14.3 → 14.4 upgrade: database ALTER guide for large datasets</h1>
+<p>This guide is for DBAs and operators planning the <strong>14.3 → 14.4</strong> IceWarp upgrade on instances with
+large mailbox databases. It explains <strong>which MySQL settings change ALTER durations</strong>, gives
+<strong>expected times by table size</strong>, shows how to <strong>pre-apply the heavy <code>item</code> rebuild</strong> with
+<code>pt-online-schema-change</code> (after widening <code>folder</code>), and covers <strong>replicated topologies</strong>.</p>
+<p>Everything below assumes InnoDB and IceWarp's split databases (accounts, groupware, directory cache,
+EAS, WebClient, antispam). Replace <code>&lt;wc_db&gt;</code> with the WebClient database name (commonly
+<code>dbiwc…wc</code>) and <code>&lt;acc_db&gt;</code> with the accounts database.</p>
+<blockquote>
+<p><strong>The <code>item</code> table dominates the window.</strong> In a measured 14.4 upgrade of a 35.2 M-row <code>item</code>
+table, the whole schema migration produced <strong>one</strong> long statement — the <code>item</code> rebuild — taking
+<strong>62 minutes</strong>, while every other change was seconds or less. Plan the window around <code>item</code>.</p>
+</blockquote>
+<hr>
+<h2 id="1-what-the-144-upgrade-actually-changes">1. What the 14.4 upgrade actually changes</h2>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Object</th>
+<th>Change</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WebClient (<code>&lt;wc_db&gt;</code>)</td>
+<td><code>item</code></td>
+<td>INT → BIGINT (<code>folder_id</code>, <code>item_id</code>, <code>size</code>, <code>source_folder_id</code>, <code>dummy_id</code>), add <code>summary</code>, <code>i_thread_id</code>, <code>is_thread_latest</code>, add <code>FK_item_folder</code>, <code>FK_i_item_thread</code></td>
+<td><strong>full table rebuild (COPY)</strong> — the only heavy statement</td>
+</tr>
+<tr>
+<td>WebClient</td>
+<td><code>folder</code></td>
+<td><code>folder_id</code>, <code>parent_folder_id</code>, <code>sync_in_progress_folder_id</code> → BIGINT</td>
+<td>COPY too (type change), but the table is small — 1.5–2 s measured</td>
+</tr>
+<tr>
+<td>WebClient</td>
+<td><code>folders</code></td>
+<td>add <code>own_acc_id</code>, drop legacy indexes/columns, add <code>FK_f_folder</code></td>
+<td>small, mostly INPLACE</td>
+</tr>
+<tr>
+<td>WebClient</td>
+<td><code>snoozed_item</code></td>
+<td>drop <code>snoozed_item_ibfk_1</code>/<code>IDX_snoozed_date</code>, <code>snoozed_item_id</code> → BIGINT, add <code>snoozed_acc_id</code>, add FKs</td>
+<td>usually tiny/empty</td>
+</tr>
+<tr>
+<td>WebClient</td>
+<td><code>thread</code></td>
+<td>add <code>FK_t_account</code>, <code>FK_t_latest_item</code></td>
+<td>fast</td>
+</tr>
+<tr>
+<td>GroupWare</td>
+<td><code>Event</code></td>
+<td><code>EvnURL</code> → MEDIUMTEXT/TEXT</td>
+<td>COPY, but <code>Event</code> is far smaller than <code>item</code></td>
+</tr>
+<tr>
+<td>GroupWare</td>
+<td><code>Conference</code>, <code>TeamChat*</code>, <code>OnlineDocumentEditing</code>, …</td>
+<td>new tables / additive columns</td>
+<td>fast</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>item</code> rebuild is a <strong>COPY</strong> because it changes column types: INT→BIGINT cannot be INSTANT and
+cannot be INPLACE, so MySQL must build a new table and copy every row.</p>
+<p>Measured example (16 vCPU test bed, 96 GB buffer pool, local NVMe, MySQL 8.0, ProxySQL in front):</p>
+<pre><code>version      14.3.0.13 -&gt; 14.4.0.0
+installer    1h 29m total
+WebClient v2 &quot;Migrate database to new WebClient v2&quot;   18:57:39 -&gt; 20:24:13
+  ALTER TABLE item …                                 1h 02m 07s  (35,206,106 rows)
+all other ALTERs                                     &lt; 3 s each
+</code></pre>
+<hr>
+<h2 id="2-which-mysql-settings-affect-alter-time">2. Which MySQL settings affect ALTER time</h2>
+<h3 id="21-the-three-that-matter-most">2.1 The three that matter most</h3>
+<ol>
+<li><strong>Redo log capacity.</strong> A small redo log forces frequent checkpoints while the copy inserts
+   millions of rows. A large redo log lets InnoDB batch writes; on big tables this is often the
+   single largest win.</li>
+<li><strong>Doublewrite.</strong> <code>innodb_doublewrite=ON</code> writes every page twice — pure write amplification for a
+   rebuild. Disabling it for the window (only if the storage/BBU is reliable) is a large win.</li>
+<li><strong>Binary log — but read this carefully.</strong> A native <code>ALTER</code> is replicated as a <strong>single statement</strong>,
+   so the binlog itself adds little to the rebuild; most of the win people attribute to
+   <code>sql_log_bin=0</code> on big ALTERs is really redo/doublewrite/IO. The real binlog cost comes from the
+   <strong>data</strong> movement around the ALTER: the migration's orphan <code>DELETE</code>, and above all
+   <code>pt-online-schema-change</code>, which copies every row with <code>INSERT</code>s and is therefore fully
+   row-logged. Disabling the binlog is only an option on a <strong>standalone</strong> server — see section 5.</li>
+</ol>
+<p>Also significant: <code>innodb_flush_log_at_trx_commit</code> (fewer commit fsyncs; the rebuild commits once, so
+the gain is moderate, but the surrounding upgrade work has many small transactions) and the DDL
+parallelism settings.</p>
+<h3 id="22-recommended-settings-for-the-window">2.2 Recommended settings for the window</h3>
+<pre><code class="language-ini">[mysqld]
+# ---- speed knobs for the 14.4 schema migration; revert afterwards ----
+skip-log-bin                       # STANDALONE ONLY — breaks replication on a primary (see §5)
+innodb_redo_log_capacity      = 16G   # MySQL 8.0.30+; older: innodb_log_file_size=8G + innodb_log_files_in_group=2
+innodb_flush_log_at_trx_commit = 2    # 2 (or 0) while durability is not required
+innodb_doublewrite            = OFF   # revert to ON after the window
+innodb_io_capacity            = 4000  # match the device (NVMe: 4000-8000)
+innodb_io_capacity_max        = 8000
+innodb_ddl_threads            = 8     # 8.0.27+; parallel index build / DDL sort
+innodb_ddl_buffer_size        = 256M  # per-thread DDL sort buffer
+innodb_parallel_read_threads  = 8     # 8.0.14+; parallel clustered-index scans
+innodb_buffer_pool_size       = 96G   # size to the working set, not to the table
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Effect on a COPY/ALTER</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_bin</code> / <code>skip-log-bin</code></td>
+<td>Small for a native COPY (one statement in the binlog); <strong>large for pt-osc</strong> (row copies).</td>
+<td>Restart required. <strong>Never <code>skip-log-bin</code> on a primary with replicas.</strong> If binlogs must stay on, consider <code>sync_binlog=0</code> and <code>binlog_row_image=minimal</code> for the DML phases.</td>
+</tr>
+<tr>
+<td><code>sync_binlog</code></td>
+<td>Moderate for DML-heavy phases.</td>
+<td>One fsync per transaction; a native rebuild is one transaction, pt-osc is many.</td>
+</tr>
+<tr>
+<td><code>innodb_redo_log_capacity</code> / <code>innodb_log_file_size</code></td>
+<td><strong>Large.</strong> Fewer checkpoints during bulk inserts.</td>
+<td>8.0.30+ uses the single capacity variable (dynamic); older builds need a restart.</td>
+</tr>
+<tr>
+<td><code>innodb_flush_log_at_trx_commit</code></td>
+<td>Moderate.</td>
+<td>Affects commit fsyncs; more relevant for pt-osc and the upgrade's many small transactions than for one rebuild.</td>
+</tr>
+<tr>
+<td><code>innodb_doublewrite</code></td>
+<td><strong>Large.</strong> Halves write amplification.</td>
+<td>Only safe on reliable storage; revert to <code>ON</code>.</td>
+</tr>
+<tr>
+<td><code>innodb_io_capacity</code> / <code>_max</code></td>
+<td>Moderate.</td>
+<td>Lets background flushing keep up with the copy; default values are tuned for slow disks.</td>
+</tr>
+<tr>
+<td><code>innodb_ddl_threads</code>, <code>innodb_ddl_buffer_size</code></td>
+<td>Moderate for index-building phases.</td>
+<td>Most effective for INPLACE <code>ADD INDEX</code>; the <code>item</code> copy also builds indexes at the end.</td>
+</tr>
+<tr>
+<td><code>innodb_parallel_read_threads</code></td>
+<td>Moderate.</td>
+<td>Parallel scan for <code>CHECK</code>/<code>ALTER</code>; main benefit on large tables.</td>
+</tr>
+<tr>
+<td><code>innodb_buffer_pool_size</code></td>
+<td>Moderate to large.</td>
+<td>Keeps secondary indexes and the primary key cached. Do not exceed RAM minus overhead.</td>
+</tr>
+<tr>
+<td><code>old_alter_table</code></td>
+<td><strong>Small for <code>item</code>, but keep it <code>OFF</code>.</strong></td>
+<td><code>ON</code> forces the legacy copy path. It does not make the <code>item</code>/<code>folder</code> type-change copies faster — those already require COPY — but it removes INPLACE for the additive steps (<code>folders</code>, <code>thread</code>, <code>ADD FOREIGN KEY</code>), turning second-level metadata changes into rebuilds.</td>
+</tr>
+<tr>
+<td><code>foreign_key_checks</code></td>
+<td>Leave <code>ON</code>.</td>
+<td>Disabling it lets <code>ADD FOREIGN KEY</code> skip validation. The 14.4 migration relies on the constraints being real.</td>
+</tr>
+<tr>
+<td><code>lower_case_table_names</code></td>
+<td>Not a timing factor.</td>
+<td>Must already be 1 (set at initialization); never change it afterwards.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Not a factor:</strong> ProxySQL, the network path, or connection multiplexing. Measured A/B on identical
+data: <code>item</code> rebuild <strong>188 s via ProxySQL vs 203 s direct</strong> — within noise. Tune the MySQL server,
+not the proxy.</p>
+<h3 id="23-applying-the-settings">2.3 Applying the settings</h3>
+<p>Most of these require a restart, which the maintenance window already provides. Restart MySQL once,
+<strong>before</strong> starting the 14.4 installer, then run the upgrade, then revert and restart again.</p>
+<p>Session-scoped knobs are only useful for statements you run yourself (the pre-alters in section 4);
+the installer opens its own connections, so server-wide settings are what count for the 14.4
+migration itself.</p>
+<hr>
+<h2 id="3-typical-alter-times">3. Typical ALTER times</h2>
+<p>Times for the <code>item</code> rebuild alone, with the settings from section 2.2, on a modern server
+(NVMe, 16+ vCPU, buffer pool large enough for the hot indexes):</p>
+<table>
+<thead>
+<tr>
+<th>Rows in <code>item</code></th>
+<th>Rebuild time</th>
+<th>Approx. per row</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 M</td>
+<td>~1 min</td>
+<td>~60 µs</td>
+</tr>
+<tr>
+<td>3 M</td>
+<td>~4 min</td>
+<td>~80 µs</td>
+</tr>
+<tr>
+<td>5 M</td>
+<td>~7 min</td>
+<td>~84 µs</td>
+</tr>
+<tr>
+<td>10 M</td>
+<td>~14 min</td>
+<td>~84 µs</td>
+</tr>
+<tr>
+<td>15 M</td>
+<td>~21 min</td>
+<td>~84 µs</td>
+</tr>
+<tr>
+<td>35 M</td>
+<td>~62 min</td>
+<td>~106 µs</td>
+</tr>
+</tbody>
+</table>
+<p>Rules of thumb:</p>
+<ul>
+<li>Up to ~15 M rows the cost is close to <strong>85 µs/row</strong> and scales linearly.</li>
+<li>Above ~15 M rows expect a <strong>25 % tail</strong> (≈105 µs/row) from larger indexes and checkpoint pressure.</li>
+<li>Estimate your own: <code>seconds ≈ rows × 0.085</code> up to 15 M, then <code>rows × 0.105</code>.</li>
+<li>These are for a <strong>single</strong> <code>item</code> rebuild. Other tables add seconds, not minutes — except
+  <code>Event</code> on GroupWare, which is a COPY too but typically 10–50× smaller.</li>
+<li>Halve the numbers if you remove the binary log <em>and</em> the doublewrite; expect 1.5–2× the numbers
+  with default durability settings on a busy server.</li>
+</ul>
+<hr>
+<h2 id="4-pre-applying-the-heavy-changes-folder-first-then-item">4. Pre-applying the heavy changes (folder first, then item)</h2>
+<p>The <code>item</code> change is <strong>backwards compatible with IceWarp 14.3</strong>: 14.3 reads and writes
+<code>folder_id</code>/<code>item_id</code>/<code>size</code>/<code>source_folder_id</code>/<code>dummy_id</code> as integers, and MySQL converts them to
+and from BIGINT transparently. The added columns (<code>summary</code>, <code>i_thread_id</code>, <code>is_thread_latest</code>) are
+either nullable or have defaults, so 14.3 simply ignores them.</p>
+<p>Do this <strong>ahead of the maintenance window</strong> (a quiet period is enough), and the 14.4 migration will
+find the columns already widened and only apply what is still missing.</p>
+<p><strong>Order matters: widen <code>folder</code> first, then <code>item</code>.</strong></p>
+<ul>
+<li><code>folder</code> is small, so it is quick.</li>
+<li>14.3 joins <code>item.folder_id = folder.folder_id</code>. Widening <code>item</code> while <code>folder</code> is still INT leaves
+  the join with mixed types; depending on the query plans, 14.3 can lose index usage and slow down.
+  Do both back-to-back (same session/day) to keep the window of mixed types as short as possible.</li>
+<li><code>item</code>'s new FK will reference <code>folder(folder_id)</code>, so the parent must be BIGINT by the time the
+  14.4 installer adds the constraint.</li>
+</ul>
+<h3 id="41-what-to-pre-apply-and-what-not-to">4.1 What to pre-apply — and what not to</h3>
+<p>Pre-apply the <strong>column definitions and the three new indexes</strong>:</p>
+<ul>
+<li><code>folder</code> — <code>folder_id</code>, <code>parent_folder_id</code>, <code>sync_in_progress_folder_id</code> → BIGINT (section 4.3).</li>
+<li><code>item</code> — the MODIFY/ADD COLUMN part of the 14.4 statement <strong>and</strong> the three indexes the migration
+  creates (<code>IDX_item_message_id</code>, <code>IDX_item_thread_latest</code>, <code>IDX_item_thread_id</code>, section 4.4).</li>
+</ul>
+<p><strong>Do not pre-create the foreign keys.</strong> <code>FK_item_folder</code> references <code>folder(folder_id)</code> and
+<code>FK_i_item_thread</code> references <code>thread(thread_id)</code>; both parents are produced by the 14.4 migration.
+Let the installer add them.</p>
+<p>The full 14.4 <code>item</code> change, for reference. You pre-apply everything except the two foreign keys:</p>
+<pre><code class="language-sql">ALTER TABLE item
+  MODIFY COLUMN folder_id          BIGINT NOT NULL,
+  MODIFY COLUMN item_id            BIGINT NOT NULL AUTO_INCREMENT,
+  MODIFY COLUMN size               BIGINT NOT NULL,
+  MODIFY COLUMN source_folder_id   BIGINT,
+  MODIFY COLUMN dummy_id           BIGINT,
+  ADD COLUMN summary               VARCHAR(512),
+  ADD COLUMN i_thread_id           BIGINT,
+  ADD COLUMN is_thread_latest      INTEGER DEFAULT 1 NOT NULL,
+  ADD INDEX IDX_item_message_id    (message_id),
+  ADD INDEX IDX_item_thread_latest (folder_id, is_thread_latest, `date`),
+  ADD INDEX IDX_item_thread_id     (i_thread_id),
+  ADD CONSTRAINT FK_item_folder FOREIGN KEY (folder_id) REFERENCES folder (folder_id)
+      ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT FK_i_item_thread FOREIGN KEY (i_thread_id) REFERENCES thread (thread_id);
+</code></pre>
+<p>In the measured migration the three indexes are issued as separate <code>CREATE INDEX</code> statements;
+folding them into the pre-alter is equivalent and lets one table pass build them all.</p>
+<p>If the indexes already exist when 14.4 runs, the installer logs
+<code>Error executing query: Duplicate key name 'IDX_item_message_id'</code> and continues — that is the
+expected "already done" path, not a failure. The same happens for the indexes 14.3 already has
+(<code>IDX_item_date</code>, <code>IDX_item_list</code>, …).</p>
+<h3 id="42-install-pt-online-schema-change">4.2 Install <code>pt-online-schema-change</code></h3>
+<p>Percona Toolkit ships <code>pt-online-schema-change</code>; it needs Perl and Perl's MySQL driver.</p>
+<p><strong>RHEL / Rocky / AlmaLinux 8–9:</strong></p>
+<pre><code class="language-bash">sudo dnf install -y https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+sudo percona-release enable tools release
+sudo dnf install -y percona-toolkit
+</code></pre>
+<p><strong>Debian / Ubuntu:</strong></p>
+<pre><code class="language-bash">wget https://repo.percona.com/apt/percona-release_latest.generic_all.deb
+sudo dpkg -i percona-release_latest.generic_all.deb
+sudo apt-get update
+sudo apt-get install -y percona-toolkit
+</code></pre>
+<p><strong>No repository access</strong> (air-gapped, DB appliance, or the DB host is not yours to install on):
+download the tarball for your architecture from
+<a href="https://www.percona.com/downloads/percona-toolkit/">https://www.percona.com/downloads/percona-toolkit/</a>, then:</p>
+<pre><code class="language-bash">tar xzf percona-toolkit-*.tar.gz
+sudo install -m 0755 percona-toolkit-*/bin/pt-online-schema-change /usr/local/bin/
+
+# the tool also needs Perl DBI and DBD::mysql
+sudo dnf install -y perl-DBI perl-DBD-MySQL          # RPM based
+# sudo apt-get install -y libdbi-perl libdbd-mysql-perl   # Debian based
+</code></pre>
+<p>Verify:</p>
+<pre><code class="language-bash">pt-online-schema-change --version
+pt-online-schema-change --help | head -5
+</code></pre>
+<p>Expected: <code>pt-online-schema-change 3.x</code> (3.5 or newer; 3.7.x is current). If it fails with
+<code>Can't locate DBD/mysql.pm</code>, the Perl MySQL driver is missing — install <code>perl-DBD-MySQL</code> (RPM) or
+<code>libdbd-mysql-perl</code> (deb).</p>
+<p>Run it <strong>from a host that can reach MySQL directly</strong> (not through ProxySQL): pt-osc needs
+<code>SHOW PROCESSLIST</code>/<code>SHOW REPLICA STATUS</code>-style access and a stable connection for hours.</p>
+<p><strong>Replica discovery for <code>--recursion-method</code>.</strong> pt-osc can find replicas with
+<code>--recursion-method=processlist</code> or <code>hosts</code>, but on managed clusters both often fail (no
+<code>SHOW SLAVE HOSTS</code>, restricted <code>PROCESSLIST</code>). The reliable method is a DSN table:</p>
+<pre><code class="language-sql">CREATE DATABASE IF NOT EXISTS percona;
+CREATE TABLE IF NOT EXISTS percona.dsns (
+  id        int(11)      NOT NULL AUTO_INCREMENT,
+  parent_id int(11)      DEFAULT NULL,
+  dsn       varchar(255) NOT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB;
+
+INSERT INTO percona.dsns (dsn) VALUES
+  ('h=192.0.2.11,P=3306,u=ptosc,p=&lt;password&gt;'),
+  ('h=192.0.2.12,P=3306,u=ptosc,p=&lt;password&gt;');
+</code></pre>
+<p>then pass <code>--recursion-method=dsn=D=percona,t=dsns</code> (see section 5). A socket can be used instead of
+host/port (<code>S=/var/lib/mysql/mysql.sock</code>), and the account needs <code>PROCESS</code> + <code>REPLICATION CLIENT</code> on
+the replicas so pt-osc can read their lag.</p>
+<h3 id="43-step-1-widen-folder">4.3 Step 1 — widen <code>folder</code></h3>
+<p>Inspect what you are about to change and whether anything references <code>folder</code>:</p>
+<pre><code class="language-sql">SELECT column_name, column_type, is_nullable, column_key, extra
+FROM information_schema.columns
+WHERE table_schema = '&lt;wc_db&gt;' AND table_name = 'folder'
+  AND column_name IN ('folder_id','parent_folder_id','sync_in_progress_folder_id');
+
+SELECT table_rows, ROUND((data_length + index_length) / 1024 / 1024) AS mb
+FROM information_schema.tables
+WHERE table_schema = '&lt;wc_db&gt;' AND table_name = 'folder';
+
+-- child FKs pointing at folder (usually none before the 14.4 migration)
+SELECT constraint_name, table_name, column_name
+FROM information_schema.key_column_usage
+WHERE table_schema = '&lt;wc_db&gt;' AND referenced_table_name = 'folder';
+</code></pre>
+<p><code>folder</code> is normally small (thousands to a few hundred thousand rows; a ~20 k-row <code>folder</code> took
+<strong>1.5–2 s</strong> in our measurements), so a plain <code>ALTER</code> is usually the simplest option:</p>
+<pre><code class="language-sql">SET SESSION old_alter_table = 0;
+SET SESSION lock_wait_timeout = 60;
+ALTER TABLE folder
+  MODIFY COLUMN folder_id                BIGINT NOT NULL AUTO_INCREMENT,
+  MODIFY COLUMN parent_folder_id         BIGINT,
+  MODIFY COLUMN sync_in_progress_folder_id BIGINT;
+</code></pre>
+<p>If <code>folder</code> is large, or you cannot take even a short metadata lock, use pt-osc instead:</p>
+<pre><code class="language-bash">pt-online-schema-change \
+  --alter &quot;MODIFY COLUMN folder_id BIGINT NOT NULL AUTO_INCREMENT, \
+           MODIFY COLUMN parent_folder_id BIGINT, \
+           MODIFY COLUMN sync_in_progress_folder_id BIGINT&quot; \
+  --alter-foreign-keys-method=rebuild_constraints \
+  --no-check-alter \
+  --chunk-time=0.5 \
+  --max-load Threads_running=50 \
+  --critical-load Threads_running=100 \
+  --print \
+  --dry-run \
+  h=&lt;db_host&gt;,P=&lt;port&gt;,u=&lt;user&gt;,p=&lt;password&gt;,D=&lt;wc_db&gt;,t=folder
+</code></pre>
+<p>Review the printed statements, then re-run with <code>--execute</code> instead of <code>--dry-run</code>.</p>
+<p>Verify the result before moving on:</p>
+<pre><code class="language-sql">SELECT column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = '&lt;wc_db&gt;' AND table_name = 'folder'
+  AND column_name IN ('folder_id','parent_folder_id','sync_in_progress_folder_id');
+-- expect bigint / bigint / bigint
+</code></pre>
+<p>Widening <code>folder</code> is <strong>not</strong> a rollback-friendly change (narrowing BIGINT→INT would have to prove no
+value exceeds the INT range). Take a backup first; if you need to abort the upgrade, keep the
+widened schema — 14.3 runs fine on it.</p>
+<h3 id="44-step-2-widen-item-with-pt-online-schema-change">4.4 Step 2 — widen <code>item</code> with <code>pt-online-schema-change</code></h3>
+<p>Prerequisites:</p>
+<ul>
+<li>Step 1 done (<code>folder</code> is BIGINT).</li>
+<li><code>snoozed_item_ibfk_1</code> dropped first — 14.3 has a child FK pointing at <code>item</code>, and pt-osc must be
+  able to swap the table. The full ordered sequence is in
+  <a href="pre-upgrade-bigint.md"><code>docs/pre-upgrade-bigint.md</code></a>.</li>
+<li>No triggers on <code>item</code> that you do not own.</li>
+<li>Free disk <strong>≥ 2× the table size</strong> (shadow table + original) — and on every replica (section 5).</li>
+<li>A backup/restore point — the conversion is not practically reversible.</li>
+</ul>
+<pre><code class="language-bash">pt-online-schema-change \
+  --alter &quot;MODIFY COLUMN folder_id BIGINT NOT NULL, \
+           MODIFY COLUMN item_id BIGINT NOT NULL AUTO_INCREMENT, \
+           MODIFY COLUMN size BIGINT NOT NULL, \
+           MODIFY COLUMN source_folder_id BIGINT, \
+           MODIFY COLUMN dummy_id BIGINT, \
+           ADD COLUMN summary VARCHAR(512), \
+           ADD COLUMN i_thread_id BIGINT, \
+           ADD COLUMN is_thread_latest INTEGER DEFAULT 1 NOT NULL, \
+           ADD INDEX IDX_item_message_id (message_id), \
+           ADD INDEX IDX_item_thread_latest (folder_id, is_thread_latest, `date`), \
+           ADD INDEX IDX_item_thread_id (i_thread_id)&quot; \
+  --alter-foreign-keys-method=rebuild_constraints \
+  --no-check-alter \
+  --chunk-time=0.5 \
+  --max-load Threads_running=50 \
+  --critical-load Threads_running=100 \
+  --pause-file=/tmp/pt-osc.pause \
+  --print \
+  --dry-run \
+  h=&lt;db_host&gt;,P=&lt;port&gt;,u=&lt;user&gt;,p=&lt;password&gt;,D=&lt;wc_db&gt;,t=item
+</code></pre>
+<p>Review the <code>--dry-run</code> output, then run the same command with <code>--execute</code> instead of <code>--dry-run</code>.</p>
+<p>Notes:</p>
+<ul>
+<li><code>--no-check-alter</code> is required because the primary key type changes; pt-osc's warning is expected.</li>
+<li><code>--alter-foreign-keys-method=rebuild_constraints</code> handles child tables (<code>snoozed_item</code>) that point
+  at <code>item</code>; <code>auto</code> is fine once that FK is dropped.</li>
+<li><code>--chunk-time=0.5</code> keeps each chunk under half a second; <code>--max-load</code>/<code>--critical-load</code> throttle
+  or abort based on <code>Threads_running</code>.</li>
+<li><code>--pause-file</code> lets you pause the copy (create the file) to relieve a busy server; remove it to
+  resume.</li>
+<li>On a <strong>replicated</strong> primary do <strong>not</strong> add <code>--set-vars "sql_log_bin=0"</code> — the copied rows would
+  never reach the replicas (section 5).</li>
+<li>pt-osc keeps 14.3 online; the final <code>RENAME</code> takes a brief metadata lock (seconds).</li>
+</ul>
+<h3 id="45-what-a-successful-run-looks-like-the-item-rebuild">4.5 What a successful run looks like — the <code>item</code> rebuild</h3>
+<p>Example for the <code>item</code> table (35,384,508 rows, as restored from a production dump), with replica
+discovery through the DSN table from section 4.2:</p>
+<pre><code class="language-bash">pt-online-schema-change \
+  --alter &quot;MODIFY COLUMN folder_id BIGINT NOT NULL, \
+           MODIFY COLUMN item_id BIGINT NOT NULL AUTO_INCREMENT, \
+           MODIFY COLUMN size BIGINT NOT NULL, \
+           MODIFY COLUMN source_folder_id BIGINT, \
+           MODIFY COLUMN dummy_id BIGINT, \
+           ADD COLUMN summary VARCHAR(512), \
+           ADD COLUMN i_thread_id BIGINT, \
+           ADD COLUMN is_thread_latest INTEGER DEFAULT 1 NOT NULL, \
+           ADD INDEX IDX_item_message_id (message_id), \
+           ADD INDEX IDX_item_thread_latest (folder_id, is_thread_latest, `date`), \
+           ADD INDEX IDX_item_thread_id (i_thread_id)&quot; \
+  --alter-foreign-keys-method=rebuild_constraints \
+  --recursion-method=dsn=D=percona,t=dsns \
+  --no-check-replication-filters \
+  --no-check-alter \
+  --chunk-time=0.5 \
+  --max-load Threads_running=100 \
+  --critical-load Threads_running=160 \
+  --max-lag=30 \
+  --pause-file=/tmp/pt-osc.pause \
+  --execute \
+  D=&lt;wc_db&gt;,t=item,u=&lt;user&gt;,h=&lt;primary_host&gt;,p=&lt;password&gt;
+</code></pre>
+<p>Output. The sequence of lines is exactly what pt-osc prints; the <code>T+…</code> offsets are illustrative —
+the copy phase is the one that runs for hours and its pace is set by your <code>--max-load</code>/<code>--max-lag</code>
+settings, not by the server's maximum throughput:</p>
+<pre><code class="language-text">Found 2 slaves:
+db-replica-1.example.net -&gt; 192.0.2.11:socket
+db-replica-2.example.net -&gt; 192.0.2.12:socket
+Will check slave lag on:
+db-replica-1.example.net -&gt; 192.0.2.11:socket
+db-replica-2.example.net -&gt; 192.0.2.12:socket
+# 6 software updates are available:
+#   * The current version for MySQL is 8.4.7-7
+#   * The current version for DBD::mysql is 5.013
+#   * The current version for Percona::Toolkit is 3.7.1
+#   * The current version for Perl is 5.42.0
+#   * The current version for MySQL is 8.4.7-7
+#   * The current version for MySQL is 8.4.7-7
+Operation, tries, wait:
+  analyze_table, 10, 1
+  copy_rows, 10, 0.25
+  create_triggers, 10, 1
+  drop_triggers, 10, 1
+  swap_tables, 10, 1
+  update_foreign_keys, 10, 1
+Altering `&lt;wc_db&gt;`.`item`...
+Creating new table...
+Created new table &lt;wc_db&gt;._item_new OK.
+Altering new table...
+Altered `&lt;wc_db&gt;`.`_item_new` OK.
+T+00:00:03  Creating triggers...
+T+00:00:04  Created triggers OK.
+T+00:00:04  Copying approximately 35384508 rows...
+T+03:12:41  Copied rows OK.
+T+03:12:43  Analyzing new table...
+T+03:12:43  Swapping tables...
+T+03:12:44  Swapped original and new tables OK.
+T+03:12:44  Dropping old table...
+T+03:14:02  Dropped old table `&lt;wc_db&gt;`.`_item_old` OK.
+T+03:14:02  Dropping triggers...
+T+03:14:03  Dropped triggers OK.
+Successfully altered `&lt;wc_db&gt;`.`item`.
+</code></pre>
+<p>Reading the output:</p>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Found 2 slaves</code> / <code>Will check slave lag on</code></td>
+<td>Replica discovery worked through <code>percona.dsns</code>. The copy pauses when lag exceeds <code>--max-lag</code> (here 30 s). <code>Cannot connect to ...</code> means the DSN table is wrong or the account lacks <code>PROCESS</code>/<code>REPLICATION CLIENT</code> on the replicas.</td>
+</tr>
+<tr>
+<td><code># 6 software updates are available</code></td>
+<td>A version nag (MySQL, DBD::mysql, Toolkit, Perl). Harmless; silence it with <code>--no-version-check</code>.</td>
+</tr>
+<tr>
+<td><code>Operation, tries, wait</code></td>
+<td>The retry policy per phase: up to 10 attempts, with the listed wait between them.</td>
+</tr>
+<tr>
+<td><code>Altering …</code>.<code>item</code></td>
+<td>Start. <code>_item_new</code> will grow to roughly the size of <code>item</code> — see the disk requirement in section 4.4.</td>
+</tr>
+<tr>
+<td><code>Creating new table</code> / <code>Altered …_item_new</code></td>
+<td>The shadow table is created and altered <strong>empty</strong>; this is instant and does not touch the data.</td>
+</tr>
+<tr>
+<td><code>Creating triggers</code> / <code>Created triggers OK</code></td>
+<td>Three triggers on <code>item</code> mirror INSERT/UPDATE/DELETE into <code>_item_new</code> for the whole copy. This is why <strong>IceWarp must not be restarted to run its own DDL on <code>item</code></strong> while pt-osc works, and why the copy slows down under write load.</td>
+</tr>
+<tr>
+<td><code>Copying approximately 35384508 rows</code> → <code>Copied rows OK</code></td>
+<td>The dominant phase. Deliberately throttled by <code>--chunk-time=0.5</code>, <code>--max-load</code>, <code>--critical-load</code> and <code>--max-lag</code>: for tens of millions of rows expect <strong>hours</strong>, not minutes. For reference, the native 14.4 rebuild of 35.2 M rows took <strong>62 min</strong> with no triggers and no chunking — pt-osc will be slower than that. The shadow table carries the three new indexes from the start, so every copied row also maintains them.</td>
+</tr>
+<tr>
+<td><code>Analyzing new table</code></td>
+<td>Refreshes statistics before the swap.</td>
+</tr>
+<tr>
+<td><code>Swapping tables</code> / <code>Swapped … OK</code></td>
+<td>The only moment IceWarp can stall: the <code>RENAME</code> takes a metadata lock. Normally sub-second, but a long-running transaction on <code>item</code> delays it.</td>
+</tr>
+<tr>
+<td><code>Dropping old table</code> / <code>Dropping triggers</code></td>
+<td>Cleanup. <code>_item_old</code> keeps its disk space until this line.</td>
+</tr>
+<tr>
+<td><code>Successfully altered …</code></td>
+<td>Done. Refresh statistics (section 4.6), verify (section 4.7), then run the 14.4 installer (section 4.8).</td>
+</tr>
+</tbody>
+</table>
+<p>For <code>item</code> you must <strong>not</strong> see:</p>
+<pre><code class="language-text">No foreign keys reference `&lt;wc_db&gt;`.`item`; ignoring --alter-foreign-keys-method.
+</code></pre>
+<p><code>snoozed_item_ibfk_1</code> points at <code>item</code>, so pt-osc either prints
+<code>Will update foreign keys on ...</code> (it will rebuild that child FK — an extra ALTER on the small
+<code>snoozed_item</code> table) or, if you already dropped the FK as in section 4.4, there is nothing to do.
+The "No foreign keys reference" line only makes sense on tables nothing points at.</p>
+<p>If pt-osc aborts (critical load, replica lag, lost connection), it drops its triggers but may leave
+<code>_item_new</code> / <code>_item_old</code>. Check for them and <code>DROP TABLE</code> before retrying:</p>
+<pre><code class="language-sql">SHOW TABLES FROM `&lt;wc_db&gt;` LIKE '\_item\_%';
+</code></pre>
+<h3 id="46-refresh-statistics-with-analyze-table">4.6 Refresh statistics with <code>ANALYZE TABLE</code></h3>
+<p>The rebuild leaves the new table with fresh statistics, but two things move them out of date: the
+migration deletes orphaned <code>item</code> rows, and any bulk work around the window changes the data
+distribution. <code>innodb_stats_auto_recalc</code> only re-samples after roughly 10 % of the rows change, so
+make it explicit.</p>
+<p>Run it <strong>after the pre-alters</strong> (pt-osc already runs <code>ANALYZE</code> on the swapped-in table, so this is a
+cheap confirmation) and again <strong>after the 14.4 installer finishes</strong>, before IceWarp goes back into
+full service:</p>
+<pre><code class="language-sql">-- the heavy one
+ANALYZE TABLE `&lt;wc_db&gt;`.`item`;
+
+-- the rest of the WebClient tables the migration touches
+ANALYZE TABLE `&lt;wc_db&gt;`.`folder`,
+              `&lt;wc_db&gt;`.`folders`,
+              `&lt;wc_db&gt;`.`snoozed_item`,
+              `&lt;wc_db&gt;`.`thread`;
+
+-- GroupWare side (Event is the only large COPY there)
+ANALYZE TABLE `&lt;gw_db&gt;`.`Event`;
+</code></pre>
+<p>What to expect and how to read it:</p>
+<ul>
+<li>Each table returns one status row (<code>status: OK</code>). <code>note: Table is already up to date</code> is also fine —
+  MySQL considers the statistics current.</li>
+<li><code>ANALYZE TABLE</code> reads index pages to sample; it does not modify data. On InnoDB (8.0) it uses the
+  INPLACE algorithm and takes a brief shared metadata lock at the start and end — run it in a quiet
+  moment, not at peak.</li>
+<li>Cost is small next to the rebuild: by default 20 sample pages per index, so a 58 GB <code>item</code> with ten
+  indexes takes seconds to a couple of minutes.</li>
+<li>For very large tables, raise the sample first (dynamic, applies to the next <code>ANALYZE</code>), then
+  re-run the statements above:</li>
+</ul>
+<p><code>sql
+  SET GLOBAL innodb_stats_persistent_sample_pages = 100;   -- default 20; revert afterwards</code></p>
+<p>Verify that the statistics are current:</p>
+<pre><code class="language-sql">SELECT table_name, last_update, n_rows, clustered_index_size, sum_of_other_index_sizes
+FROM mysql.innodb_table_stats
+WHERE database_name = '&lt;wc_db&gt;' AND table_name = 'item';
+
+SELECT index_name, cardinality
+FROM information_schema.statistics
+WHERE table_schema = '&lt;wc_db&gt;' AND table_name = 'item'
+ORDER BY index_name, seq_in_index;
+</code></pre>
+<p><code>last_update</code> should be the time of your <code>ANALYZE</code>, <code>n_rows</code> should be close to the real row count,
+and every index should have a non-<code>NULL</code> <code>cardinality</code> (a <code>NULL</code> means that index was never
+sampled). Keep <code>innodb_stats_persistent=ON</code> (the default) so the statistics survive a restart.</p>
+<h3 id="47-verify-before-running-the-installer">4.7 Verify before running the installer</h3>
+<pre><code class="language-sql">SELECT table_name, column_name, column_type
+FROM information_schema.columns
+WHERE table_schema = '&lt;wc_db&gt;'
+  AND ( (table_name = 'item' AND column_name IN
+          ('folder_id','item_id','size','source_folder_id','dummy_id',
+           'summary','i_thread_id','is_thread_latest'))
+     OR (table_name = 'folder' AND column_name IN
+          ('folder_id','parent_folder_id','sync_in_progress_folder_id')) )
+ORDER BY table_name, ordinal_position;
+</code></pre>
+<p>Expected: <code>folder_id</code>, <code>item_id</code>, <code>size</code>, <code>source_folder_id</code>, <code>dummy_id</code> are <code>bigint</code>;
+<code>folder</code> columns are <code>bigint</code>; the three added columns exist with the types above.</p>
+<pre><code class="language-sql">-- before the 14.4 upgrade this should return nothing; FK_item_folder appears after it
+SELECT constraint_name FROM information_schema.table_constraints
+WHERE table_schema = '&lt;wc_db&gt;'
+  AND constraint_name IN ('FK_item_folder','FK_i_item_thread');
+</code></pre>
+<h3 id="48-what-the-installer-does-afterwards">4.8 What the installer does afterwards</h3>
+<p>With the columns already in place, the 14.4 WebClient migration detects the applied changes and
+skips the rebuild; only the remaining changes run (the <code>item</code> foreign keys, <code>folders</code>,
+<code>snoozed_item</code>, <code>thread</code>, and the GroupWare work). Watch the installer log to confirm:</p>
+<pre><code class="language-bash">grep -E &quot;WebClient DB upgrade task|WebClient is ready|successfully upgraded&quot; \
+  /opt/icewarp/logs/setup/icewarp-install.log /var/log/iw/upgrade-14.4.log
+</code></pre>
+<p>If the <code>item</code> rebuild is still attempted, the pre-alter did not match what the migration expects —
+re-check section 4.7 before proceeding rather than letting it run twice.</p>
+<h2 id="5-servers-with-replicas">5. Servers with replicas</h2>
+<h3 id="51-what-changes-when-replicas-exist">5.1 What changes when replicas exist</h3>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Implication</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Binlog</td>
+<td>The <code>item</code> ALTER replicates as a <strong>single statement</strong> (small), but every replica must <strong>re-execute the rebuild</strong>. The migration's orphan <code>DELETE</code> and, above all, pt-osc's row copies are row-logged: expect large binlog files, network transfer, and binlog disk usage on the primary.</td>
+</tr>
+<tr>
+<td>Replica lag</td>
+<td>A replica applies the rebuild serially; expect lag roughly equal to the rebuild time (tens of minutes on large tables). Do not plan a failover window that assumes replicas are current.</td>
+</tr>
+<tr>
+<td>Reads on replicas</td>
+<td>While the applier executes the ALTER it holds a metadata lock on <code>item</code>; queries touching that table block or hit <code>lock_wait_timeout</code> and fail. Drain or redirect read traffic from replicas for the duration.</td>
+</tr>
+<tr>
+<td>Disk on replicas</td>
+<td>Each replica needs the shadow copy too: <strong>≥ 2× the table size free</strong> on every replica, not just the primary. A replica that runs out of disk will stop applying.</td>
+</tr>
+<tr>
+<td>Semi-sync</td>
+<td>If a replica is slow, semi-sync commit waits can throttle the primary further. Consider raising <code>rpl_semi_sync_source_timeout</code> or disabling semi-sync for the window.</td>
+</tr>
+<tr>
+<td>Durability on replicas</td>
+<td><code>innodb_flush_log_at_trx_commit=1</code>, <code>sync_binlog=1</code> and doublewrite on a replica make apply slower. Relax them on replicas for the window if their crash safety is acceptable.</td>
+</tr>
+<tr>
+<td>Binlog suppression</td>
+<td><strong><code>skip-log-bin</code> is not an option on a primary with replicas</strong> — the replicas would stop receiving changes. Likewise, <code>--set-vars "sql_log_bin=0"</code> for pt-osc must not be used: the copied rows would never reach the replicas and the final <code>RENAME</code> would land on an empty shadow table there.</td>
+</tr>
+<tr>
+<td>Running the DDL on replicas</td>
+<td>Do <strong>not</strong> run the ALTER manually on a replica and expect the primary's statement to be a no-op — <code>ADD COLUMN</code> would fail as a duplicate. Run the change on the primary and let it replicate.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-what-to-do">5.2 What to do</h3>
+<ol>
+<li><strong>Keep binary logging enabled</strong> on the primary. Use sections 2.1–2.2 for the redo/doublewrite/IO
+   wins instead; they do not break replication.</li>
+<li><strong>Tune every replica the same way</strong> (<code>innodb_redo_log_capacity</code>, <code>innodb_doublewrite</code>,
+   <code>innodb_io_capacity</code>, buffer pool). Otherwise the replica becomes the bottleneck while applying.</li>
+<li><strong>Free disk on every replica</strong> (≥ 2× the table) and watch it during apply:
+   <code>df -h</code> on the replica's datadir.</li>
+<li><strong>Drain read traffic</strong> from replicas that will apply the DDL, or accept that queries on <code>item</code>
+   fail with lock timeouts while it runs.</li>
+<li><strong>Let pt-osc watch replica lag</strong> so it pauses instead of piling on:</li>
+</ol>
+<p><code>bash
+   pt-online-schema-change \
+     --alter "MODIFY COLUMN folder_id BIGINT NOT NULL, \
+              MODIFY COLUMN item_id BIGINT NOT NULL AUTO_INCREMENT, \
+              MODIFY COLUMN size BIGINT NOT NULL, \
+              MODIFY COLUMN source_folder_id BIGINT, \
+              MODIFY COLUMN dummy_id BIGINT, \
+              ADD COLUMN summary VARCHAR(512), \
+              ADD COLUMN i_thread_id BIGINT, \
+              ADD COLUMN is_thread_latest INTEGER DEFAULT 1 NOT NULL, \
+              ADD INDEX IDX_item_message_id (message_id), \
+              ADD INDEX IDX_item_thread_latest (folder_id, is_thread_latest, `date`), \
+              ADD INDEX IDX_item_thread_id (i_thread_id)" \
+     --alter-foreign-keys-method=rebuild_constraints \
+     --no-check-alter \
+     --chunk-time=0.5 \
+     --recursion-method=dsn=D=percona,t=dsns \
+     --no-check-replication-filters \
+     --max-lag=30 \
+     --check-interval=5 \
+     --pause-file=/tmp/pt-osc.pause \
+     --print --dry-run \
+     h=&lt;primary_host&gt;,P=&lt;port&gt;,u=&lt;user&gt;,p=&lt;password&gt;,D=&lt;wc_db&gt;,t=item</code></p>
+<p><code>--recursion-method=dsn=D=percona,t=dsns</code> discovers the replicas from the DSN table built in
+   section 4.2 (this is the method that works when <code>PROCESSLIST</code>/<code>SHOW SLAVE HOSTS</code> are restricted).
+   To test a single replica instead, drop <code>--recursion-method</code> and use
+   <code>--check-replica-lag h=&lt;replica&gt;,P=&lt;port&gt;,u=&lt;user&gt;,p=&lt;password&gt;</code> (older Toolkit builds:
+   <code>--check-slave-lag</code>). Either way pt-osc pauses when lag exceeds <code>--max-lag</code> (default 1 s — raise
+   it, or the copy will stop constantly). Review with <code>--dry-run</code>, then re-run with <code>--execute</code>.</p>
+<ol start="6">
+<li><strong>Monitor replication</strong> while the migration runs:</li>
+</ol>
+<p><code>sql
+   SHOW REPLICA STATUS\G          -- Seconds_Behind_Source, Replica_SQL_Running, Last_SQL_Error
+   SELECT * FROM performance_schema.replication_applier_status_by_worker;</code></p>
+<ol start="7">
+<li><strong>Expect one long statement per replica.</strong> If you have several replicas, they will each spend the
+   rebuild time applying it; the last one finishes roughly one rebuild <em>after</em> the primary, so size
+   the window accordingly (primary + slowest replica), not just the primary.</li>
+<li><strong>If a replica cannot keep up</strong> (disk, IO), take it out of rotation before the window and let it
+   catch up afterwards — the 14.4 DDL will replay and it will perform the rebuild itself. If it fell
+   too far behind (binlogs purged), rebuild it from a fresh backup taken after the 14.4 upgrade.</li>
+<li><strong>Backups from replicas:</strong> if you dump from a replica, do not start the dump while that replica is
+   applying the ALTER; wait until replication is caught up and the schema is consistent.</li>
+</ol>
+<hr>
+<h2 id="6-maintenance-window-checklist">6. Maintenance-window checklist</h2>
+<ol>
+<li>Take a backup (dump or snapshot) of all IceWarp databases.</li>
+<li>Optionally (recommended), pre-apply <code>folder</code> and then <code>item</code> with the steps in section 4 — days in
+   advance, in a quiet period.</li>
+<li>Apply the speed settings (section 2.2) on the primary <strong>and every replica</strong> and restart MySQL.</li>
+<li>Drain read traffic from replicas (section 5.2).</li>
+<li>Stop IceWarp on the application server (<code>/opt/icewarp/icewarpd.sh --stop all</code>).</li>
+<li>Run the 14.4 installer (<code>sh ./install.sh --auto …</code> or interactively — see the note below).</li>
+<li>Let the WebClient migration finish; do not restart IceWarp while it runs.</li>
+<li>Wait for replicas to apply the schema changes.</li>
+<li>Start IceWarp and verify accounts, WebClient, GroupWare, ActiveSync.</li>
+<li>Run <code>ANALYZE TABLE</code> on <code>item</code> and the other migrated tables (section 4.6).</li>
+<li>Revert the speed settings, restart MySQL (and replicas), and confirm <code>innodb_doublewrite=ON</code>,
+    <code>innodb_flush_log_at_trx_commit=1</code>, and binlogging as required.</li>
+<li>Re-enable backups and replication monitoring.</li>
+</ol>
+<blockquote>
+<p><strong>Installer note.</strong> Automode can exit early with the "Waiting for Groupware DB" warning while the
+WebClient migration is still running. That warning is harmless, but <strong>nothing must restart IceWarp
+until the WebClient migration finishes</strong> (<code>C_WC_UpgradeStatus = 2</code>). Interactive mode asks before
+continuing and then waits; automode should be followed by a wait for
+<code>C_WC_UpgradeStatus = 2</code> and, if the installer exited early, <code>cd /opt/icewarp &amp;&amp; ./upgrade.sh &lt;old_version&gt;</code>.</p>
+</blockquote>
+<hr>
+<h2 id="7-monitoring-a-rebuild-in-progress">7. Monitoring a rebuild in progress</h2>
+<pre><code class="language-sql">-- the statement currently running, its age and state
+SELECT id, time, state, LEFT(info, 100) AS sql
+FROM information_schema.processlist
+WHERE info LIKE 'ALTER TABLE item%';
+
+-- COPY writes a shadow table: its size tracks progress against the original
+-- (run on the DB host)
+--   ls -laS /var/lib/mysql/&lt;wc_db&gt;/item.ibd /var/lib/mysql/&lt;wc_db&gt;/#sql-*.ibd
+
+-- rows written into the new table (roughly rows copied)
+SHOW GLOBAL STATUS LIKE 'Innodb_rows_inserted';
+</code></pre>
+<p>A <code>state</code> of <code>copy to tmp table</code> means the COPY algorithm is running (expected for <code>item</code>); it
+changes to index-build/rename phases near the end. Expect the shadow table to grow to roughly the
+size of <code>item.ibd</code>.</p>
+<hr>
+<h2 id="8-related-documents">8. Related documents</h2>
+<ul>
+<li><a href="pre-upgrade-bigint.md"><code>docs/pre-upgrade-bigint.md</code></a> — the full step-by-step BIGINT runbook
+  (<code>folder</code>, <code>snoozed_item</code> FK, combined <code>item</code> ALTER, verification, native fallback).</li>
+</ul>
+</main>
+</body>
+</html>
